@@ -13,12 +13,12 @@
 //! {
 //!     fn init(& mut self) {}
 //!     fn name(& self) -> String { return "Plugin".to_string(); }
-//! fn get_parameter(& self, index: usize) -> f64 { return self.parameters[index].1; }
-//! fn set_parameter(& mut self, index: usize, value: f64) { self.parameters[index].1 = value; }
-//! fn get_parameter_name(& self, index: usize) -> String { return self.parameters[index].0.clone(); }
-//! fn run(& self, input: & Box<[Box<[f64]>]>, sidechain_in: & Box<[Box<[f64]>]>, output: & mut Box<[Box<[f64]>]>, sidechain_out: & mut Box<[Box<[f64]>]>)
+//!     fn get_parameter(& self, index: usize) -> f64 { return self.parameters[index].1; }
+//!     fn set_parameter(& mut self, index: usize, value: f64) { self.parameters[index].1 = value; }
+//!     fn get_parameter_name(& self, index: usize) -> String { return self.parameters[index].0.clone(); }
+//!     fn run(& self, input: & Box<[Buffer<f64>]>>, sidechain_in: & Buffer<f64>, output: & mut Box<[Buffer<f64>]>, sidechain_out: & mut Buffer<f64>)
 //!     {
-//!         for x in 0..input.len() { for y in 0..input[x].len() { output[x][y] = input[x][y] * self.parameters[0].1; } }
+//!         for x in 0..input.len() { for y in 0..input[x].len() { input[x][y] = input[x][y] * self.parameters[0].1; } }
 //!     }
 //! }
 //! mkaudiolibrary::declare_plugin!(Plugin, Plugin::new());
@@ -28,6 +28,7 @@ extern crate libloading;
 
 use std::ops::Add;
 use libloading::{Library, Symbol};
+use crate::buffer::Buffer;
 
 /// Declare plugin.
 #[macro_export]
@@ -58,8 +59,8 @@ pub trait Processor
     ///Get the name of the parameter of the index.
     fn get_parameter_name(& self, index : usize) -> String;
     ///Process with the plugin. Optional sidechain I/O. Buffer size of I/O must be same.
-    fn run(& self, input: & Box<[Box<[f64]>]>, sidechain_in : & Box<[f64]>,
-           output: & mut Box<[Box<[f64]>]>, sidechain_out : & mut Box<[f64]>);
+    fn run(& self, input: & Option<Box<[Buffer<f64>]>>, sidechain_in : & Buffer<f64>,
+           output: & mut Box<[Buffer<f64>]>, sidechain_out : & mut Buffer<f64>);
 }
 ///Loads plugin.
 pub fn load(filename : String) -> Result<Box<dyn Processor>, Box<dyn std::error::Error>>
