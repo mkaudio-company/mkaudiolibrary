@@ -1,0 +1,23 @@
+[package]
+name = "mkaudiolibrary"
+description = "Modular audio processing library including MKAU plugin format based on Rust."
+license = "GPL-3.0"
+version = "0.1.11"
+edition = "2021"
+documentation = "https://docs.rs/mkaudiolibrary"
+readme = "README.md"
+homepage = "https://github.com/mkaudio-company/mkaudiolibrary"
+repository = "https://github.com/mkaudio-company/mkaudiolibrary"
+keywords = ["audio", "signal-processing"]
+categories = ["Audio", "Signal-Processing"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[profile.dev]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+
+[dependencies]
+libloading = "0.8.0"
