@@ -13,6 +13,8 @@ simulation : includes convolution and saturation struct and function for audio p
 processor : includes MKAU plugin format.
 
 # Version
+0.1.12 - Changen I/O type of methonds of simulation and Processor trait into Buffer.
+
 0.1.11 - Added Buffer for simple format of audio buffer. Inline-abled processing functions.
 
 0.1.10 - Used boxed slice for Saturation for block processing. Always inlined processing functions.
@@ -35,4 +37,5 @@ processor : includes MKAU plugin format.
 
 # License
 The library is offered under GPLv3.0 license for open source usage.
+
 If you want to use mkaudiolibrary for closed source project, please email to minjaekim@mkaudio.company for agreement and support.

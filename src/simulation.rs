@@ -1,4 +1,4 @@
-use crate::buffer::PushBuffer;
+use crate::buffer::{Buffer, PushBuffer};
 
 ///Buffer and window for convolution. Buffer stores data for continuation. Generic T must be either f32 or f64.
 pub struct Convolution<T>
@@ -8,6 +8,7 @@ pub struct Convolution<T>
 }
 impl Convolution<f32>
 {
+    #[inline]
     pub fn new(data : & [f32]) -> Self
     {
         let mut window = Self
@@ -19,8 +20,8 @@ impl Convolution<f32>
         return window;
     }
     ///Convolve input data into window, then returns into output.
-    #[inline(always)]
-    pub fn run(& mut self, input : & Box<[f32]>, output : & mut Box<[f32]>)
+    #[inline]
+    pub fn run(& mut self, input : & Buffer<f32>, output : & mut Buffer<f32>)
     {
         let mut data = 0.0;
         for x in 0..input.len()
@@ -33,6 +34,7 @@ impl Convolution<f32>
 }
 impl Convolution<f64>
 {
+    #[inline]
     pub fn new(data : & [f64]) -> Self
     {
         let mut window = Self
@@ -44,8 +46,8 @@ impl Convolution<f64>
         return window;
     }
     ///Convolve input data into window, then returns into output.
-    #[inline(always)]
-    pub fn run(& mut self, input : & Box<[f64]>, output : & mut Box<[f64]>)
+    #[inline]
+    pub fn run(& mut self, input : & Buffer<f64>, output : & mut Buffer<f64>)
     {
         let mut data = 0.0;
         for x in 0..input.len()
@@ -69,6 +71,7 @@ pub struct Saturation<T>
 impl Saturation<f32>
 {
     ///New saturation data.
+    #[inline]
     pub fn new(ths : f32, lim : f32) -> Self
     {
         let gap = lim - ths;
@@ -81,8 +84,8 @@ impl Saturation<f32>
         return Self { ths, lim, gap, rad_pow, org }
     }
     ///Process each data for non-linear behavior.
-    #[inline(always)]
-    pub fn run(input : & Box<[f32]>, output : & mut Box<[f32]>, upper : Saturation<f32>, lower : Saturation<f32>)
+    #[inline]
+    pub fn run(input : & Buffer<f32>, output : & mut Buffer<f32>, upper : Saturation<f32>, lower : Saturation<f32>)
     {
         for i in 0..input.len()
         {
@@ -97,6 +100,7 @@ impl Saturation<f32>
 impl Saturation<f64>
 {
     ///New saturation data.
+    #[inline]
     pub fn new(ths : f64, lim : f64) -> Self
     {
         let gap = lim - ths;
@@ -109,8 +113,8 @@ impl Saturation<f64>
         return Self { ths, lim, gap, rad_pow, org }
     }
     ///Process each data for non-linear behavior.
-    #[inline(always)]
-    pub fn run(input : & Box<[f64]>, output : & mut Box<[f64]>, upper : Saturation<f64>, lower : Saturation<f64>)
+    #[inline]
+    pub fn run(input : & Buffer<f64>, output : & mut Buffer<f64>, upper : Saturation<f64>, lower : Saturation<f64>)
     {
         for i in 0..input.len()
         {
@@ -122,6 +126,3 @@ impl Saturation<f64>
         }
     }
 }
-
-///Read and write data from boxed slice I/O.
-pub type Process = fn(input : & Box<[f64]>, output : & mut Box<[f64]>);
