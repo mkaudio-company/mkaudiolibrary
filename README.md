@@ -13,6 +13,8 @@ simulation : includes convolution and saturation struct and function for audio p
 processor : includes MKAU plugin format.
 
 # Version
+0.1.11 - Added Buffer for simple format of audio buffer. Inline-abled processing functions.
+
 0.1.10 - Used boxed slice for Saturation for block processing. Always inlined processing functions.
 
 0.1.9 - Used boxed slice instead of CircularBuffer for Processor.
