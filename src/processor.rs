@@ -59,8 +59,8 @@ pub trait Processor
     ///Get the name of the parameter of the index.
     fn get_parameter_name(& self, index : usize) -> String;
     ///Process with the plugin. Optional sidechain I/O. Buffer size of I/O must be same.
-    fn run(& self, input: & Option<Box<[Buffer<f64>]>>, sidechain_in : & Buffer<f64>,
-           output: & mut Box<[Buffer<f64>]>, sidechain_out : & mut Buffer<f64>);
+    fn run(& self, input: & Option<Box<[Buffer<f64>]>>, sidechain_in : & Option<Buffer<f64>>,
+           output: & mut Box<[Buffer<f64>]>, sidechain_out : & mut Option<Buffer<f64>>);
 }
 ///Loads plugin.
 pub fn load(filename : String) -> Result<Box<dyn Processor>, Box<dyn std::error::Error>>
