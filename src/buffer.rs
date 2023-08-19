@@ -129,7 +129,7 @@ impl<T> std::ops::Index<usize> for PushBuffer<T>
         let data = unsafe { self.buffer.offset(index as isize).as_ref() };
         match data
         {
-            None => { panic!("Access to invalid memory"); }
+            None => { panic!("Access to invalid memory!"); }
             Some(reference) => { return reference; }
         }
     }
@@ -142,7 +142,7 @@ impl<T> std::ops::IndexMut<usize> for PushBuffer<T>
         let data = unsafe { self.buffer.offset(index as isize).as_mut() };
         match data
         {
-            None => { panic!("Access to invalid memory"); }
+            None => { panic!("Access to invalid memory!"); }
             Some(reference) => { return reference; }
         }
     }
