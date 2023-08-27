@@ -9,15 +9,15 @@ pub struct Convolution<T>
 impl Convolution<f32>
 {
     #[inline]
-    pub fn new(data : & [f32]) -> Self
+    pub fn new(data : & [f32]) -> Result<Self, ()>
     {
         let mut window = Self
         {
-            buffer : PushBuffer::<f32>::new(data.len()),
+            buffer : PushBuffer::<f32>::new(data.len())?,
             window : Box::<[f32]>::from(data),
         };
         window.buffer.index = window.buffer.len();
-        return window;
+        return Ok(window);
     }
     ///Convolve input data into window, then returns into output.
     #[inline]
@@ -35,15 +35,15 @@ impl Convolution<f32>
 impl Convolution<f64>
 {
     #[inline]
-    pub fn new(data : & [f64]) -> Self
+    pub fn new(data : & [f64]) -> Result<Self, ()>
     {
         let mut window = Self
         {
-            buffer : PushBuffer::<f64>::new(data.len()),
+            buffer : PushBuffer::<f64>::new(data.len())?,
             window : Box::<[f64]>::from(data),
         };
         window.buffer.index = window.buffer.len();
-        return window;
+        return Ok(window);
     }
     ///Convolve input data into window, then returns into output.
     #[inline]

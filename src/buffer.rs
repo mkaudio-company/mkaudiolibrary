@@ -11,17 +11,21 @@ impl<T> Buffer<T>
 {
     ///New Buffer with length.
     #[inline]
-    pub fn new(len : usize) -> Self
+    pub fn new(len : usize) -> Result<Self,()>
     {
         let layout = std::alloc::Layout::array::<T>(len);
         match layout
         {
             Ok(layout) =>
-                {
-                    let buffer = unsafe { std::alloc::alloc_zeroed(layout) as * mut T };
-                    return Self { buffer, len };
-                }
-            Err(error) => { panic!("{}", error); }
+            {
+                let buffer = unsafe { std::alloc::alloc_zeroed(layout) as * mut T };
+                return Ok(Self { buffer, len });
+            }
+            Err(error) =>
+            {
+                eprintln!("{}", error);
+                return Err(());
+            }
         }
     }
     ///Returns the length of the buffer.
@@ -63,8 +67,13 @@ impl<T> Drop for Buffer<T>
     #[inline]
     fn drop(&mut self)
     {
-        let layout = std::alloc::Layout::array::<T>(self.len).unwrap();
-        unsafe { std::alloc::dealloc(self.buffer as * mut u8, layout) };
+        let layout = std::alloc::Layout::array::<T>(self.len);
+        match layout
+        {
+            Ok(layout) => { unsafe { std::alloc::dealloc(self.buffer as * mut u8, layout) }; },
+            Err(_) => {},
+        }
+        
     }
 }
 
@@ -80,7 +89,7 @@ impl<T> PushBuffer<T>
 {
     ///New PushBuffer with length.
     #[inline]
-    pub fn new(len : usize) -> Self
+    pub fn new(len : usize) -> Result<Self,()>
     {
         let layout = Layout::array::<T>(len);
 
@@ -89,9 +98,13 @@ impl<T> PushBuffer<T>
             Ok(layout) =>
                 {
                     let buffer = unsafe { alloc_zeroed(layout) as * mut T };
-                    return PushBuffer { buffer, index : 0, len : len as isize };
+                    return Ok(PushBuffer { buffer, index : 0, len : len as isize });
                 }
-            Err(error) => { panic!("{}", error); }
+            Err(error) =>
+            {
+                eprintln!("{}", error);
+                return Err(());
+            }
         }
     }
 }
@@ -156,7 +169,7 @@ impl<T> Drop for PushBuffer<T>
         match layout
         {
             Ok(layout) => { unsafe { dealloc(self.buffer as * mut u8, layout); } }
-            Err(error) => { panic!("{}", error); }
+            Err(_) => {}
         }
     }
 }
@@ -174,19 +187,23 @@ impl<T> CircularBuffer<T>
 {
     ///New CircularBuffer with length.
     #[inline]
-    pub fn new(len : usize) -> Self
+    pub fn new(len : usize) -> Result<Self, ()>
     {
         let layout = Layout::array::<T>(len);
-
         match layout
         {
             Ok(layout) =>
-                {
-                    let buffer = unsafe { alloc_zeroed(layout) as * mut T };
-                    return CircularBuffer { buffer, read : 0, write : 0, len : len as isize };
-                }
-            Err(error) => { panic!("{}", error); }
+            {
+                let buffer = unsafe { alloc_zeroed(layout) as * mut T };
+                return Ok(CircularBuffer { buffer, read : 0, write : 0, len : len as isize });
+            },
+            Err(error) =>
+            {
+                eprintln!("{}", error);
+                return Err(());
+            },
         }
+        
     }
 }
 impl<T : Copy> CircularBuffer<T>
@@ -225,7 +242,7 @@ impl<T> Drop for CircularBuffer<T>
         match layout
         {
             Ok(layout) => { unsafe { dealloc(self.buffer as * mut u8, layout); } }
-            Err(error) => { panic!("{}", error); }
+            Err(_) => {}
         }
     }
 }
