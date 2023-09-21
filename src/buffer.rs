@@ -1,4 +1,4 @@
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{alloc_zeroed, dealloc, Layout, LayoutError};
 
 ///A simple impliment of sized buffer.
 #[derive(Clone)]
@@ -11,7 +11,7 @@ impl<T> Buffer<T>
 {
     ///New Buffer with length.
     #[inline]
-    pub fn new(len : usize) -> Result<Self,()>
+    pub fn new(len : usize) -> Result<Self,LayoutError>
     {
         let layout = std::alloc::Layout::array::<T>(len);
         match layout
@@ -23,10 +23,34 @@ impl<T> Buffer<T>
             }
             Err(error) =>
             {
-                eprintln!("{}", error);
-                return Err(());
+                return Err(error);
             }
         }
+    }
+    ///Resizes the buffer.
+    #[inline]
+    pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
+    {
+        let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
+        let alloc_layout = std::alloc::Layout::array::<T>(len)?;
+        unsafe
+        {
+            std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
+            self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
+        }
+        return Ok(());
+    }
+    ///Converts internal data chunk as silce
+    #[inline]
+    pub fn into_slice(&self) -> &[T]
+    {
+        unsafe { std::slice::from_raw_parts(self.buffer, self.len) }
+    }
+    ///Converts internal data chunk as mutable silce
+    #[inline]
+    pub fn into_slice_mut(&self) -> &mut[T]
+    {
+        unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) }
     }
     ///Returns the length of the buffer.
     #[inline]
@@ -39,8 +63,12 @@ impl<T> std::ops::Index<usize> for Buffer<T>
     #[inline]
     fn index(&self, index: usize) -> &Self::Output
     {
-        let real = if index > self.len { index % self.len } else { index };
-        let data = unsafe { self.buffer.offset(real as isize).as_ref() };
+        let real_index = if index > self.len
+        {
+            eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
+            index % self.len
+        } else { index };
+        let data = unsafe { self.buffer.offset(real_index as isize).as_ref() };
         match data
         {
             None => { panic!("Access to invalid memory"); }
@@ -53,8 +81,12 @@ impl<T> std::ops::IndexMut<usize> for Buffer<T>
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output
     {
-        let real = if index > self.len { index % self.len } else { index };
-        let data = unsafe { self.buffer.offset(real as isize).as_mut() };
+        let real_index = if index > self.len
+        {
+            eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
+            index % self.len
+        } else { index };
+        let data = unsafe { self.buffer.offset(real_index as isize).as_mut() };
         match data
         {
             None => { panic!("Access to invalid memory"); }
@@ -82,55 +114,67 @@ impl<T> Drop for Buffer<T>
 pub struct PushBuffer<T>
 {
     buffer : * mut T,
-    pub index : isize,
-    len : isize
-}
-impl<T> PushBuffer<T>
-{
-    ///New PushBuffer with length.
-    #[inline]
-    pub fn new(len : usize) -> Result<Self,()>
-    {
-        let layout = Layout::array::<T>(len);
-
-        match layout
-        {
-            Ok(layout) =>
-                {
-                    let buffer = unsafe { alloc_zeroed(layout) as * mut T };
-                    return Ok(PushBuffer { buffer, index : 0, len : len as isize });
-                }
-            Err(error) =>
-            {
-                eprintln!("{}", error);
-                return Err(());
-            }
-        }
-    }
+    pub index : usize,
+    len : usize
 }
 impl<T : Copy> PushBuffer<T>
 {
+    ///New PushBuffer with length.
+    #[inline]
+    pub fn new(len : usize) -> Result<Self, LayoutError>
+    {
+        let layout = Layout::array::<T>(len)?;
+        unsafe { Ok(PushBuffer { buffer : alloc_zeroed(layout) as * mut T , index : 0, len : len }) }
+    }
+    ///Resizes the buffer.
+    #[inline]
+    pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
+    {
+        let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
+        let alloc_layout = std::alloc::Layout::array::<T>(len)?;
+        unsafe
+        {
+            std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
+            self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
+        }
+        return Ok(());
+    }
+    ///Converts internal data chunk as silce
+    #[inline]
+    pub fn into_slice(&self) -> &[T]
+    {
+        unsafe { std::slice::from_raw_parts(self.buffer, self.len) }
+    }
+    ///Converts internal data chunk as mutable silce
+    #[inline]
+    pub fn into_slice_mut(&self) -> &mut[T]
+    {
+        unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) }
+    }
     ///Pushes data to buffer.
     #[inline]
     pub fn push(& mut self, value : T)
     {
         if self.index <= self.len
         {
-            unsafe { * self.buffer.offset(self.index) = value; }
+            unsafe { * self.buffer.offset(self.index as isize) = value; }
             self.index += 1;
         }
         else
         {
             unsafe
                 {
-                    (1..self.len).for_each(|x| * self.buffer.offset(x - 1) = * self.buffer.offset(x));
-                    * self.buffer.offset(self.index) = value;
+                    (1..self.len).for_each(|x| * self.buffer.offset(x as isize - 1) = * self.buffer.offset(x as isize));
+                    * self.buffer.offset(self.index as isize) = value;
                 }
         }
     }
+    ///Initialize index.
+    #[inline]
+    pub fn init_index(&mut self, index : usize) { self.index = index; }
     ///Returns the length of the buffer.
     #[inline]
-    pub fn len(& self) -> isize { return self.len; }
+    pub fn len(& self) -> usize { return self.len; }
 }
 impl<T> std::ops::Index<usize> for PushBuffer<T>
 {
@@ -139,7 +183,12 @@ impl<T> std::ops::Index<usize> for PushBuffer<T>
     #[inline]
     fn index(& self, index : usize) -> & Self::Output
     {
-        let data = unsafe { self.buffer.offset(index as isize).as_ref() };
+        let real_index = if index > self.len
+        {
+            eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
+            index % self.len
+        } else { index };
+        let data = unsafe { self.buffer.offset(real_index as isize).as_ref() };
         match data
         {
             None => { panic!("Access to invalid memory!"); }
@@ -152,7 +201,12 @@ impl<T> std::ops::IndexMut<usize> for PushBuffer<T>
     #[inline]
     fn index_mut(& mut self, index : usize) -> & mut Self::Output
     {
-        let data = unsafe { self.buffer.offset(index as isize).as_mut() };
+        let real_index = if index > self.len
+        {
+            eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
+            index % self.len
+        } else { index };
+        let data = unsafe { self.buffer.offset(real_index as isize).as_mut() };
         match data
         {
             None => { panic!("Access to invalid memory!"); }
@@ -179,59 +233,73 @@ impl<T> Drop for PushBuffer<T>
 pub struct CircularBuffer<T>
 {
     buffer : * mut T,
-    read : isize,
-    write : isize,
-    len : isize
-}
-impl<T> CircularBuffer<T>
-{
-    ///New CircularBuffer with length.
-    #[inline]
-    pub fn new(len : usize) -> Result<Self, ()>
-    {
-        let layout = Layout::array::<T>(len);
-        match layout
-        {
-            Ok(layout) =>
-            {
-                let buffer = unsafe { alloc_zeroed(layout) as * mut T };
-                return Ok(CircularBuffer { buffer, read : 0, write : 0, len : len as isize });
-            },
-            Err(error) =>
-            {
-                eprintln!("{}", error);
-                return Err(());
-            },
-        }
-        
-    }
+    read : usize,
+    write : usize,
+    len : usize
 }
 impl<T : Copy> CircularBuffer<T>
 {
+    ///New CircularBuffer with length.
+    #[inline]
+    pub fn new(len : usize) -> Result<Self, LayoutError>
+    {
+        let layout = Layout::array::<T>(len)?;
+        let buffer = unsafe { alloc_zeroed(layout) as * mut T };
+        return Ok(CircularBuffer { buffer, read : 0, write : 0, len : len });
+        
+    }
+    ///Resizes the buffer.
+    #[inline]
+    pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
+    {
+        let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
+        let alloc_layout = std::alloc::Layout::array::<T>(len)?;
+        unsafe
+        {
+            std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
+            self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
+        }
+        self.read = 0;
+        self.write = 0;
+
+        return Ok(());
+    }
+    ///Converts internal data chunk as silce
+    #[inline]
+    pub fn into_slice(&self) -> &[T]
+    {
+        unsafe { std::slice::from_raw_parts(self.buffer, self.len) }
+    }
+    ///Converts internal data chunk as mutable silce
+    #[inline]
+    pub fn into_slice_mut(&self) -> &mut[T]
+    {
+        unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) }
+    }
     ///Pushes data to buffer.
     #[inline]
     pub fn push(& mut self, value : T)
     {
-        unsafe { * self.buffer.offset(self.write) = value; }
+        unsafe { * self.buffer.offset(self.write as isize) = value; }
         if self.write < self.len() { self.write += 1; } else { self.write = 0; }
     }
     ///Reads next data of the buffer.
     #[inline]
     pub fn next(& mut self) -> T
     {
-        let value = unsafe { *self.buffer.offset(self.read) };
+        let value = unsafe { *self.buffer.offset(self.read as isize) };
         if self.write < self.len() { self.read += 1; } else { self.read = 0; }
         return value;
     }
     ///Initializes write index.
     #[inline]
-    pub fn init_write(& mut self, index : isize) { self.write = index; }
+    pub fn init_write(& mut self, index : usize) { self.write = index; }
     ///Initializes read index.
     #[inline]
-    pub fn init_read(& mut self, index : isize) { self.write = index; }
+    pub fn init_read(& mut self, index : usize) { self.write = index; }
     ///Returns the length of the buffer.
     #[inline]
-    pub fn len(& self) -> isize { return self.len; }
+    pub fn len(& self) -> usize { return self.len; }
 }
 impl<T> Drop for CircularBuffer<T>
 {

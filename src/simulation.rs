@@ -1,3 +1,5 @@
+use std::alloc::LayoutError;
+
 use crate::buffer::{Buffer, PushBuffer};
 
 ///Buffer and window for convolution. Buffer stores data for continuation. Generic T must be either f32 or f64.
@@ -9,7 +11,7 @@ pub struct Convolution<T>
 impl Convolution<f32>
 {
     #[inline]
-    pub fn new(data : & [f32]) -> Result<Self, ()>
+    pub fn new(data : & [f32]) -> Result<Self, LayoutError>
     {
         let mut window = Self
         {
@@ -35,7 +37,7 @@ impl Convolution<f32>
 impl Convolution<f64>
 {
     #[inline]
-    pub fn new(data : & [f64]) -> Result<Self, ()>
+    pub fn new(data : & [f64]) -> Result<Self, LayoutError>
     {
         let mut window = Self
         {
