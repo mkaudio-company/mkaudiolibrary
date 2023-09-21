@@ -13,19 +13,14 @@ impl<T> Buffer<T>
     #[inline]
     pub fn new(len : usize) -> Result<Self,LayoutError>
     {
-        let layout = std::alloc::Layout::array::<T>(len);
-        match layout
-        {
-            Ok(layout) =>
-            {
-                let buffer = unsafe { std::alloc::alloc_zeroed(layout) as * mut T };
-                return Ok(Self { buffer, len });
-            }
-            Err(error) =>
-            {
-                return Err(error);
-            }
-        }
+        let layout = std::alloc::Layout::array::<T>(len)?;
+        unsafe { Ok(Self { buffer : std::alloc::alloc_zeroed(layout) as * mut T , len }) }
+    }
+    ///New Buffer from raw pointer.
+    #[inline]
+    pub fn from_raw(ptr : * mut T, len : usize) -> Self
+    {
+        Self { buffer : ptr, len }
     }
     ///Resizes the buffer.
     #[inline]
@@ -38,7 +33,7 @@ impl<T> Buffer<T>
             std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
             self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
         }
-        return Ok(());
+        Ok(())
     }
     ///Converts internal data chunk as silce
     #[inline]
@@ -103,9 +98,8 @@ impl<T> Drop for Buffer<T>
         match layout
         {
             Ok(layout) => { unsafe { std::alloc::dealloc(self.buffer as * mut u8, layout) }; },
-            Err(_) => {},
+            Err(error) => { eprintln!("drop failed : {}", error); }
         }
-        
     }
 }
 
@@ -114,7 +108,7 @@ impl<T> Drop for Buffer<T>
 pub struct PushBuffer<T>
 {
     buffer : * mut T,
-    pub index : usize,
+    index : usize,
     len : usize
 }
 impl<T : Copy> PushBuffer<T>
@@ -125,6 +119,12 @@ impl<T : Copy> PushBuffer<T>
     {
         let layout = Layout::array::<T>(len)?;
         unsafe { Ok(PushBuffer { buffer : alloc_zeroed(layout) as * mut T , index : 0, len : len }) }
+    }
+    ///New PushBuffer from raw pointer.
+    #[inline]
+    pub fn from_raw(ptr : * mut T, len : usize) -> Self
+    {
+        Self { buffer : ptr, index : 0, len }
     }
     ///Resizes the buffer.
     #[inline]
@@ -137,7 +137,7 @@ impl<T : Copy> PushBuffer<T>
             std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
             self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
         }
-        return Ok(());
+        Ok(())
     }
     ///Converts internal data chunk as silce
     #[inline]
@@ -169,9 +169,12 @@ impl<T : Copy> PushBuffer<T>
                 }
         }
     }
-    ///Initialize index.
     #[inline]
-    pub fn init_index(&mut self, index : usize) { self.index = index; }
+    ///Get index.
+    pub fn get_index(&self) -> usize { self.index }
+    ///Set index.
+    #[inline]
+    pub fn set_index(&mut self, index : usize) { self.index = index; }
     ///Returns the length of the buffer.
     #[inline]
     pub fn len(& self) -> usize { return self.len; }
@@ -223,7 +226,7 @@ impl<T> Drop for PushBuffer<T>
         match layout
         {
             Ok(layout) => { unsafe { dealloc(self.buffer as * mut u8, layout); } }
-            Err(_) => {}
+            Err(error) => { eprintln!("drop failed : {}", error); }
         }
     }
 }
@@ -244,9 +247,13 @@ impl<T : Copy> CircularBuffer<T>
     pub fn new(len : usize) -> Result<Self, LayoutError>
     {
         let layout = Layout::array::<T>(len)?;
-        let buffer = unsafe { alloc_zeroed(layout) as * mut T };
-        return Ok(CircularBuffer { buffer, read : 0, write : 0, len : len });
-        
+        unsafe { Ok(CircularBuffer { buffer : alloc_zeroed(layout) as * mut T, read : 0, write : 0, len : len }) }
+    }
+    ///New CircularBuffer from raw pointer.
+    #[inline]
+    pub fn from_raw(ptr : * mut T, len : usize) -> Self
+    {
+        Self { buffer : ptr, read : 0, write : 0, len }
     }
     ///Resizes the buffer.
     #[inline]
@@ -262,7 +269,7 @@ impl<T : Copy> CircularBuffer<T>
         self.read = 0;
         self.write = 0;
 
-        return Ok(());
+        Ok(())
     }
     ///Converts internal data chunk as silce
     #[inline]
@@ -289,7 +296,7 @@ impl<T : Copy> CircularBuffer<T>
     {
         let value = unsafe { *self.buffer.offset(self.read as isize) };
         if self.write < self.len() { self.read += 1; } else { self.read = 0; }
-        return value;
+        value
     }
     ///Initializes write index.
     #[inline]
@@ -310,7 +317,7 @@ impl<T> Drop for CircularBuffer<T>
         match layout
         {
             Ok(layout) => { unsafe { dealloc(self.buffer as * mut u8, layout); } }
-            Err(_) => {}
+            Err(error) => { eprintln!("drop failed : {}", error); }
         }
     }
 }

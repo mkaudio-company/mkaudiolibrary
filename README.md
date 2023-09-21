@@ -13,6 +13,8 @@ simulation : includes convolution and saturation struct and function for audio p
 processor : includes MKAU plugin format.
 
 # Version
+0.1.14 - Added from_raw function for Buffers.
+
 0.1.13 - Buffers return LayoutError when error occured allocating buffer, added resize, into_slice, and into_slice_mut functions for Buffers.
 
 0.1.12 - Changen I/O type of methonds of simulation and Processor trait into Buffer.

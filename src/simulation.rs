@@ -18,8 +18,8 @@ impl Convolution<f32>
             buffer : PushBuffer::<f32>::new(data.len())?,
             window : Box::<[f32]>::from(data),
         };
-        window.buffer.index = window.buffer.len();
-        return Ok(window);
+        window.buffer.set_index(window.buffer.len());
+        Ok(window)
     }
     ///Convolve input data into window, then returns into output.
     #[inline]
@@ -44,8 +44,8 @@ impl Convolution<f64>
             buffer : PushBuffer::<f64>::new(data.len())?,
             window : Box::<[f64]>::from(data),
         };
-        window.buffer.index = window.buffer.len();
-        return Ok(window);
+        window.buffer.set_index(window.buffer.len());
+        Ok(window)
     }
     ///Convolve input data into window, then returns into output.
     #[inline]
@@ -83,7 +83,7 @@ impl Saturation<f32>
         let rad_pow = rad.powi(2);
         let org = lim - rad;
 
-        return Self { ths, lim, gap, rad_pow, org }
+        Self { ths, lim, gap, rad_pow, org }
     }
     ///Process each data for non-linear behavior.
     #[inline]
@@ -112,7 +112,7 @@ impl Saturation<f64>
         let rad_pow = rad.powi(2);
         let org = lim - rad;
 
-        return Self { ths, lim, gap, rad_pow, org }
+        Self { ths, lim, gap, rad_pow, org }
     }
     ///Process each data for non-linear behavior.
     #[inline]
