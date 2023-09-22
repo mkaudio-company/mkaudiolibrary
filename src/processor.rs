@@ -1,24 +1,43 @@
 //! ### Use
 //! ```
+//! use slint;
+//! 
 //! use mkaudiolibrary::buffer::*;
 //! use mkaudiolibrary::processor::*;
 //!
+//! //We recommend slint for UI design.
+//! slint::slint!
+//! {
+//!     export component UI
+//!     {
+//!         todo!()
+//!     }
+//! }
+//! 
 //! #[derive(Debug, Default)]
 //! struct Plugin
 //! {
+//!     ui : UI,
 //!     parameters : [(String, f64);1],
 //! }
-//! impl Plugin { fn new() -> Self { return Plugin { parameters : [(parameter.to_string(), 0.5)] }; } }
+//! impl Plugin { fn new() -> Self { return Plugin { ui : UI::new().unwrap(), parameters : [(parameter.to_string(), 0.5)] }; } }
 //! impl Processor for Plugin
 //! {
-//!     fn init(& mut self) {}
+//!     fn init(& mut self) { self.run().unwrap(); }
 //!     fn name(& self) -> String { return "Plugin".to_string(); }
 //!     fn get_parameter(& self, index: usize) -> f64 { return self.parameters[index].1; }
 //!     fn set_parameter(& mut self, index: usize, value: f64) { self.parameters[index].1 = value; }
 //!     fn get_parameter_name(& self, index: usize) -> String { return self.parameters[index].0.clone(); }
-//!     fn run(& self, input: & Box<[Buffer<f64>]>>, sidechain_in: & Buffer<f64>, output: & mut Box<[Buffer<f64>]>, sidechain_out: & mut Buffer<f64>)
+//!     fn open_window(&self) { self.ui.show().unwrap(); }
+//!     fn close_window(&self) { self.ui.hide().unwrap(); }
+//!     fn run(& self, input: & Option<Buffer<[Buffer<f64>]>>>, sidechain_in: & Option<Buffer<f64>>, output: & mut Buffer<[Buffer<f64>]>, sidechain_out: & mut Option<Buffer<f64>>)
 //!     {
-//!         for x in 0..input.len() { for y in 0..input[x].len() { input[x][y] = input[x][y] * self.parameters[0].1; } }
+//!         if input.is_none()
+//!         {
+//!             return;
+//!         }
+//!         let input = input.as_ref();
+//!         for x in 0..input.len() { for y in 0..input[x].len() { output[x][y] = input[x][y] * self.parameters[0].1; } }
 //!     }
 //! }
 //! mkaudiolibrary::declare_plugin!(Plugin, Plugin::new());
@@ -58,6 +77,10 @@ pub trait Processor
     fn set_parameter(& mut self, index : usize, value : f64);
     ///Get the name of the parameter of the index.
     fn get_parameter_name(& self, index : usize) -> String;
+    ///Open the view of the processor.
+    fn open_window(&self);
+    ///Close the view of the processor.
+    fn close_window(&self);
     ///Process with the plugin. Optional sidechain I/O. Buffer size of I/O must be same.
     fn run(& self, input: & Option<Buffer<Buffer<f64>>>, sidechain_in : & Option<Buffer<f64>>,
            output: & mut Buffer<Buffer<f64>>, sidechain_out : & mut Option<Buffer<f64>>);
