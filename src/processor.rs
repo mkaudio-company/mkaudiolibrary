@@ -30,7 +30,7 @@
 //!     fn get_parameter_name(& self, index: usize) -> String { return self.parameters[index].0.clone(); }
 //!     fn open_window(&self) { self.ui.show().unwrap(); }
 //!     fn close_window(&self) { self.ui.hide().unwrap(); }
-//!     fn run(& self, input: & Option<Buffer<[Buffer<f64>]>>>, sidechain_in: & Option<Buffer<f64>>, output: & mut Buffer<[Buffer<f64>]>, sidechain_out: & mut Option<Buffer<f64>>)
+//!     fn run(& self, input: & Option<Buffer<Buffer<f64>>>, sidechain_in: & Option<Buffer<f64>>, output: & mut Buffer<[Buffer<f64>]>, sidechain_out: & mut Option<Buffer<f64>>)
 //!     {
 //!         if input.is_none()
 //!         {
