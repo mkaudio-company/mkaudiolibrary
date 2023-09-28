@@ -32,7 +32,7 @@
 //!     fn open_window(&self) { self.ui.show().unwrap(); }
 //!     fn close_window(&self) { self.ui.hide().unwrap(); }
 //!     fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize) { Buffer::resize(buffer_size).unwrap(); }
-//!     fn run(& self, input: &Option<&Buffer<f64>>, sidechain_in: &Option<&mut Buffer<f64>>, output: &mut Buffer<f64>, sidechain_out: &mut Option<&mut Buffer<f64>>)
+//!     fn run(& self, input: &Option<&Buffer<f64>>, sidechain_in: &Option<&Buffer<f64>>, output: &mut Buffer<f64>, sidechain_out: &mut Option<&mut Buffer<f64>>)
 //!     {
 //!         if input.is_none()
 //!         {
@@ -86,7 +86,7 @@ pub trait Processor
     ///Prepare internal methods for play.
     fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize);
     ///Process with the plugin. Optional sidechain I/O. Buffer size of I/O must be same.
-    fn run(& self, input: &Option<&Buffer<f64>>, sidechain_in : &Option<&mut Buffer<f64>>,
+    fn run(& self, input: &Option<&Buffer<f64>>, sidechain_in : &Option<&Buffer<f64>>,
            output: &mut Buffer<f64>, sidechain_out : &mut Option<&mut Buffer<f64>>);
 }
 ///Loads plugin.
