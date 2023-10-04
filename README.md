@@ -13,6 +13,8 @@ simulation : includes convolution and saturation struct and function for audio p
 processor : includes MKAU plugin format.
 
 # Version
+0.1.20 - Added Deref, DerefMut for buffers.
+
 0.1.17, 0.1.18, 0.1.19 - Corrected processor IO types.
 
 0.1.16 - Changed process function IO to mono. We recommend to use internal buffer for linking.
