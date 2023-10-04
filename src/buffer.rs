@@ -1,4 +1,4 @@
-use std::{alloc::{alloc_zeroed, dealloc, Layout, LayoutError}, ops::DerefMut};
+use std::alloc::{alloc_zeroed, dealloc, Layout, LayoutError};
 
 ///A simple impliment of sized buffer.
 #[derive(Clone)]
