@@ -1,4 +1,4 @@
-use std::alloc::{alloc_zeroed, dealloc, Layout, LayoutError};
+use std::{alloc::{alloc_zeroed, dealloc, Layout, LayoutError}, ops::DerefMut};
 
 ///A simple impliment of sized buffer.
 #[derive(Clone)]
@@ -87,6 +87,22 @@ impl<T> std::ops::IndexMut<usize> for Buffer<T>
             None => { panic!("Access to invalid memory"); }
             Some(reference) => { return reference; }
         }
+    }
+}
+impl<T> std::ops::Deref for Buffer<T>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target
+    {
+        unsafe { self.buffer.as_ref() }.expect("Failed to Deref.")
+    }
+}
+impl<T> std::ops::DerefMut for Buffer<T>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
+        unsafe { self.buffer.as_mut() }.expect("Failed to DerefMut.")
     }
 }
 impl<T> Drop for Buffer<T>
@@ -217,6 +233,22 @@ impl<T> std::ops::IndexMut<usize> for PushBuffer<T>
         }
     }
 }
+impl<T> std::ops::Deref for PushBuffer<T>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target
+    {
+        unsafe { self.buffer.as_ref() }.expect("Failed to Deref.")
+    }
+}
+impl<T> std::ops::DerefMut for PushBuffer<T>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
+        unsafe { self.buffer.as_mut() }.expect("Failed to DerefMut.")
+    }
+}
 impl<T> Drop for PushBuffer<T>
 {
     #[inline]
@@ -307,6 +339,22 @@ impl<T : Copy> CircularBuffer<T>
     ///Returns the length of the buffer.
     #[inline]
     pub fn len(& self) -> usize { return self.len; }
+}
+impl<T> std::ops::Deref for CircularBuffer<T>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target
+    {
+        unsafe { self.buffer.as_ref() }.expect("Failed to Deref.")
+    }
+}
+impl<T> std::ops::DerefMut for CircularBuffer<T>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
+        unsafe { self.buffer.as_mut() }.expect("Failed to DerefMut.")
+    }
 }
 impl<T> Drop for CircularBuffer<T>
 {
