@@ -137,9 +137,9 @@ impl Compression
         {
             for index in 0..buffer_size
             {
-                if input[index] > real_threshold { self.buffer -= ratio_to_db((input[index] - real_threshold) / (self.ratio * (self.attack / (1000.0 * sample_rate)))); }
+                if input[index] > real_threshold { self.buffer -= ratio_to_db((input[index] - real_threshold) / (self.ratio * (sample_rate / (self.attack * 1000.0)))); }
                 output[index] = input[index] * real_gain * db_to_ratio(self.buffer);
-                if self.buffer < 0.0 { self.buffer += self.buffer / (self.release * 1000.0 / sample_rate); }
+                if self.buffer < 0.0 { self.buffer += self.buffer * self.release * 1000.0 / sample_rate; }
             }
         });
     }
@@ -167,7 +167,7 @@ impl Limit
             {
                 if input[index] * real_gain > real_ceiling { self.buffer -= ratio_to_db(input[index] * real_gain - real_ceiling); }
                 output[index] = input[index] * real_gain * db_to_ratio(self.buffer);
-                if self.buffer < 0.0 { self.buffer += self.buffer / (self.release / (1000.0 * sample_rate)); }
+                if self.buffer < 0.0 { self.buffer += self.buffer * self.release * 1000.0 / sample_rate; }
             }
         });
     }
