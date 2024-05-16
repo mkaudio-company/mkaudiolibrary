@@ -1,8 +1,6 @@
-#![feature(new_uninit)]
-
 //! Modular audio processing library including MKAU plugin format based on Rust.
 //! buffer : includes buffer, push buffer, and circular buffer.
-//! simulation : includes convolution and saturation function for audio processing.
+//! dsp : includes convolution, saturation, compression, limiter, and delay for audio processing.
 //! processor : includes MKAU plugin format.
 //!
 //! # License
@@ -12,6 +10,6 @@
 /// includes push buffer and circular buffer.
 pub mod buffer;
 /// includes convolution and saturation function for audio processing.
-pub mod simulation;
+pub mod dsp;
 /// includes MKAU plugin format.
 pub mod processor;

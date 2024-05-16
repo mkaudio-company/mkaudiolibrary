@@ -13,7 +13,9 @@ simulation : includes convolution and saturation struct and function for audio p
 processor : includes MKAU plugin format.
 
 # Version
-0.1.21 - Modified Buffer for unsafe multithread processing with reference count, appended usage of convolution to any number type, changed I/O of processor
+0.2.0 - Updated processor loader and documentation for processor. Added basic compressor, limiter, and delay.
+
+0.1.21 - Modified Buffer for unsafe multithread processing with reference count, appended usage of convolution to any number type, changed I/O of processor.
 
 0.1.20 - Added Deref, DerefMut for buffers.
 

@@ -1,49 +1,37 @@
 //! ### Use
 //! ```
-//! use slint;
-//! 
 //! use mkaudiolibrary::buffer::*;
 //! use mkaudiolibrary::processor::*;
-//!
-//! //We recommend slint for UI design.
-//! slint::slint!
-//! {
-//!     export component UI
-//!     {
-//!         todo!()
-//!     }
-//! }
 //! 
-//! #[derive(Debug, Default)]
+//! struct UI;
+//! 
 //! struct Plugin
 //! {
 //!     ui : UI,
 //!     parameters : [(String, f64);1],
 //!     internal_buffer : Buffer<f64>
 //! }
-//! impl Plugin { fn new() -> Self { return Plugin { ui : UI::new().unwrap(), parameters : [(parameter.to_string(), 0.5)], internal_buffer : Buffer::new(1024).unwrap() }; } }
+//! impl Plugin { fn new() -> Self { Self { ui : todo!(), parameters : [(format!("parameter"), 0.5)], internal_buffer : Buffer::new(1024).unwrap() } } }
 //! impl Processor for Plugin
 //! {
-//!     fn init(& mut self) { self.ui.run().unwrap(); }
-//!     fn name(& self) -> String { return "Plugin".to_string(); }
-//!     fn get_parameter(& self, index: usize) -> f64 { return self.parameters[index].1; }
+//!     fn init(& mut self) { todo!() }
+//!     fn name(& self) -> String { format!("Plugin") }
+//!     fn get_parameter(& self, index: usize) -> f64 { self.parameters[index].1 }
 //!     fn set_parameter(& mut self, index: usize, value: f64) { self.parameters[index].1 = value; }
-//!     fn get_parameter_name(& self, index: usize) -> String { return self.parameters[index].0.clone(); }
-//!     fn open_window(&self) { self.ui.show().unwrap(); }
-//!     fn close_window(&self) { self.ui.hide().unwrap(); }
-//!     fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize) { Buffer::resize(buffer_size).unwrap(); }
+//!     fn get_parameter_name(& self, index: usize) -> String { self.parameters[index].0.clone() }
+//!     fn open_window(&self) { todo!() }
+//!     fn close_window(&self) { todo!() }
+//!     fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize) { self.internal_buffer.resize(buffer_size).unwrap(); }
 //!     fn run(& self, input: &Buffer<Buffer<f64>>, sidechain_in: &Buffer<Buffer<f64>>, output: &mut Buffer<Buffer<f64>>, sidechain_out: &mut Buffer<Buffer<f64>>)
 //!     {
-//!         if input.is_none() { return }
-//!         for sample in 0..input.len() { output[sample] = input[sample] * self.parameters[0].1; }
+//!         for channel in 0..input.len() { for sample in 0..input[channel].len() { output[channel][sample] = input[channel][sample] * self.parameters[0].1; } }
 //!     }
 //! }
-//! mkaudiolibrary::declare_plugin!(Plugin, Plugin::new());
+//! mkaudiolibrary::declare_plugin!(Plugin, Plugin::new);
 //! ```
 
 extern crate libloading;
 
-use std::ops::Add;
 use libloading::{Library, Symbol};
 use crate::buffer::Buffer;
 
@@ -56,7 +44,7 @@ macro_rules! declare_plugin
         #[no_mangle]
         pub extern "C" fn _create() -> * mut dyn Processor
         {
-            let constructor : fn() -> plugin_type = constructor;
+            let constructor : fn() -> $plugin_type = $constructor;
             let object = constructor();
             let boxed : Box<dyn Processor> = Box::new(object);
             return Box::into_raw(boxed);
@@ -67,7 +55,7 @@ pub trait Processor
 {
     ///Initialize processor when loaded.
     fn init(& mut self);
-    ///Returns name.
+    ///Get name.
     fn name(& self) -> String;
     ///Get the value of the parameter of the index.
     fn get_parameter(& self, index : usize) -> f64;
@@ -86,14 +74,15 @@ pub trait Processor
            output: &mut Buffer<Buffer<f64>>, sidechain_out : &mut Buffer<Buffer<f64>>);
 }
 ///Loads plugin.
-pub fn load(filename : String) -> Result<Box<dyn Processor>, Box<dyn std::error::Error>>
+pub fn load(path : &str, name : &str) -> Result<Box<dyn Processor>, libloading::Error>
 {
     unsafe
-        {
-            let lib = Library::new(filename.add(".mkap").as_str())?;
-            let constructor : Symbol<unsafe extern fn() -> * mut dyn Processor> = lib.get(b"_create\0")?;
-            let mut plugin = Box::from_raw(constructor());
-            plugin.init();
-            Ok(plugin)
-        }
+    {
+        let file = format!("{}/{}.mkap", path, name);
+        let lib = Library::new(&file)?;
+        let constructor : Symbol<unsafe extern fn() -> * mut dyn Processor> = lib.get(b"_create\0")?;
+        let mut plugin = Box::from_raw(constructor());
+        plugin.init();
+        Ok(plugin)
+    }
 }

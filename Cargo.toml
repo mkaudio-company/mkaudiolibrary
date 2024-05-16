@@ -14,4 +14,5 @@ categories = ["Audio", "Signal-Processing"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libloading = "0.8.0"
+libloading = "0.8.3"
+no_denormals = "0.1.2"
