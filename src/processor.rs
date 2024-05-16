@@ -31,8 +31,8 @@
 //! ```
 
 extern crate libloading;
-
 use libloading::{Library, Symbol};
+
 use crate::buffer::Buffer;
 
 /// Declare plugin.

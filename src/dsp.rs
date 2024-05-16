@@ -115,6 +115,7 @@ impl Saturation<f64>
     }
 }
 
+/// Basic compressor unit.
 #[derive(Default)]
 pub struct Compression
 {
@@ -145,6 +146,7 @@ impl Compression
     }
 }
 
+/// Basic limiter unit.
 #[derive(Default)]
 pub struct Limit
 {
@@ -173,6 +175,7 @@ impl Limit
     }
 }
 
+/// Basic delay unit.
 pub struct Delay
 {
     time : f64,                 // Delay time in ms.
