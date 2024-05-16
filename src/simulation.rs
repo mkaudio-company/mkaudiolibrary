@@ -6,57 +6,29 @@ use crate::buffer::{Buffer, PushBuffer};
 pub struct Convolution<T>
 {
     buffer : PushBuffer<T>,
-    window : Box<[T]>
+    window : Buffer<T>
 }
-impl Convolution<f32>
+impl<T : std::ops::Add<Output = T> + std::ops::Mul<Output = T> + Send + Sync + Copy + Default> Convolution<T>
 {
-    #[inline]
-    pub fn new(data : & [f32]) -> Result<Self, LayoutError>
+    pub fn new(data : &mut [T]) -> Result<Self, LayoutError>
     {
         let mut window = Self
         {
-            buffer : PushBuffer::<f32>::new(data.len())?,
-            window : Box::<[f32]>::from(data),
+            buffer : PushBuffer::<T>::new(data.len())?,
+            window : Buffer::from_raw(data.as_mut_ptr(), data.len()),
         };
         window.buffer.set_index(window.buffer.len());
         Ok(window)
     }
     ///Convolve input data into window, then returns into output.
-    #[inline]
-    pub fn run(& mut self, input : & Buffer<f32>, output : & mut Buffer<f32>)
+    pub fn run(& mut self, input : &Buffer<T>, output : &mut Buffer<T>)
     {
-        let mut data = 0.0;
-        for x in 0..input.len()
+        let mut data = T::default();
+        for index in 0..input.len()
         {
-            self.buffer.push(input[x]);
-            (0..self.window.len()).for_each(|x| data += self.buffer[x] * self.window[x]);
-            output[x] = data;
-        }
-    }
-}
-impl Convolution<f64>
-{
-    #[inline]
-    pub fn new(data : & [f64]) -> Result<Self, LayoutError>
-    {
-        let mut window = Self
-        {
-            buffer : PushBuffer::<f64>::new(data.len())?,
-            window : Box::<[f64]>::from(data),
-        };
-        window.buffer.set_index(window.buffer.len());
-        Ok(window)
-    }
-    ///Convolve input data into window, then returns into output.
-    #[inline]
-    pub fn run(& mut self, input : & Buffer<f64>, output : & mut Buffer<f64>)
-    {
-        let mut data = 0.0;
-        for x in 0..input.len()
-        {
-            self.buffer.push(input[x]);
-            (0..self.window.len()).for_each(|x| data += self.buffer[x] * self.window[x]);
-            output[x] = data;
+            self.buffer.push(input[index]);
+            (0..self.window.len()).for_each(|index| data = data + self.buffer[index] * self.window[index]);
+            output[index] = data;
         }
     }
 }
@@ -73,7 +45,6 @@ pub struct Saturation<T>
 impl Saturation<f32>
 {
     ///New saturation data.
-    #[inline]
     pub fn new(ths : f32, lim : f32) -> Self
     {
         let gap = lim - ths;
@@ -86,23 +57,21 @@ impl Saturation<f32>
         Self { ths, lim, gap, rad_pow, org }
     }
     ///Process each data for non-linear behavior.
-    #[inline]
     pub fn run(input : & Buffer<f32>, output : & mut Buffer<f32>, upper : Saturation<f32>, lower : Saturation<f32>)
     {
-        for i in 0..input.len()
+        for index in 0..input.len()
         {
-            if input[i] > upper.lim + upper.gap { output[i] = upper.lim; }
-            else if input[i] > upper.ths { output[i] =  upper.org + (upper.rad_pow - (upper.lim - input[i]).powi(2)).sqrt(); }
-            else if input[i] < lower.lim - lower.gap { output[i] = upper.lim; }
-            else if input[i] < lower.ths { output[i] = lower.org - (lower.rad_pow - (lower.lim - input[i]).powi(2)).sqrt(); }
-            else { output[i] = input[i]; }
+            if input[index] > upper.lim + upper.gap { output[index] = upper.lim; }
+            else if input[index] > upper.ths { output[index] =  upper.org + (upper.rad_pow - (upper.lim - input[index]).powi(2)).sqrt(); }
+            else if input[index] < lower.lim - lower.gap { output[index] = upper.lim; }
+            else if input[index] < lower.ths { output[index] = lower.org - (lower.rad_pow - (lower.lim - input[index]).powi(2)).sqrt(); }
+            else { output[index] = input[index]; }
         }
     }
 }
 impl Saturation<f64>
 {
     ///New saturation data.
-    #[inline]
     pub fn new(ths : f64, lim : f64) -> Self
     {
         let gap = lim - ths;
@@ -115,16 +84,15 @@ impl Saturation<f64>
         Self { ths, lim, gap, rad_pow, org }
     }
     ///Process each data for non-linear behavior.
-    #[inline]
     pub fn run(input : & Buffer<f64>, output : & mut Buffer<f64>, upper : Saturation<f64>, lower : Saturation<f64>)
     {
-        for i in 0..input.len()
+        for index in 0..input.len()
         {
-            if input[i] > upper.lim + upper.gap { output[i] = upper.lim; }
-            else if input[i] > upper.ths { output[i] =  upper.org + (upper.rad_pow - (upper.lim - input[i]).powi(2)).sqrt(); }
-            else if input[i] < lower.lim - lower.gap { output[i] = upper.lim; }
-            else if input[i] < lower.ths { output[i] = lower.org - (lower.rad_pow - (lower.lim - input[i]).powi(2)).sqrt(); }
-            else { output[i] = input[i]; }
+            if input[index] > upper.lim + upper.gap { output[index] = upper.lim; }
+            else if input[index] > upper.ths { output[index] =  upper.org + (upper.rad_pow - (upper.lim - input[index]).powi(2)).sqrt(); }
+            else if input[index] < lower.lim - lower.gap { output[index] = upper.lim; }
+            else if input[index] < lower.ths { output[index] = lower.org - (lower.rad_pow - (lower.lim - input[index]).powi(2)).sqrt(); }
+            else { output[index] = input[index]; }
         }
     }
 }

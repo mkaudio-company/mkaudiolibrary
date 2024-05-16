@@ -1,29 +1,26 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout, LayoutError};
 
-///A simple impliment of sized buffer.
-#[derive(Clone)]
+/// Sized Buffer that can be used in multi-threaded environment, with reference count. Be conscious, this is unsafe from data hazards.
 pub struct Buffer<T>
 {
-    buffer : * mut T,
-    len : usize
+    buffer : *mut T,
+    len : usize,
+    count : *mut usize
 }
-impl<T> Buffer<T>
+impl<T : Sized + Send + Sync> Buffer<T>
 {
-    ///New Buffer with length.
-    #[inline]
+    /// New Buffer with length.
     pub fn new(len : usize) -> Result<Self,LayoutError>
     {
         let layout = std::alloc::Layout::array::<T>(len)?;
-        unsafe { Ok(Self { buffer : std::alloc::alloc_zeroed(layout) as * mut T , len }) }
+        unsafe { Ok(Self { buffer : std::alloc::alloc_zeroed(layout) as * mut T , len, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize }) }
     }
-    ///New Buffer from raw pointer.
-    #[inline]
+    /// New Buffer from raw pointer.
     pub fn from_raw(ptr : * mut T, len : usize) -> Self
     {
-        Self { buffer : ptr, len }
+        Self { buffer : ptr, len, count : unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) } as *mut usize }
     }
-    ///Resizes the buffer.
-    #[inline]
+    /// Resizes the buffer.
     pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
     {
         let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
@@ -32,30 +29,22 @@ impl<T> Buffer<T>
         {
             std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
             self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
+            self.len = len;
         }
         Ok(())
     }
-    ///Converts internal data chunk as silce
-    #[inline]
-    pub fn into_slice(&self) -> &[T]
-    {
-        unsafe { std::slice::from_raw_parts(self.buffer, self.len) }
-    }
-    ///Converts internal data chunk as mutable silce
-    #[inline]
-    pub fn into_slice_mut(&self) -> &mut[T]
-    {
-        unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) }
-    }
-    ///Returns the length of the buffer.
-    #[inline]
+    /// Converts internal data chunk as silce
+    pub fn into_slice(&self) -> &[T] { unsafe { std::slice::from_raw_parts(self.buffer, self.len) } }
+    /// Converts internal data chunk as mutable silce
+    pub fn into_slice_mut(&self) -> &mut[T] { unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) } }
+    /// Returns the length of the buffer.
     pub fn len(&self) -> usize { return self.len; }
 }
 impl<T> std::ops::Index<usize> for Buffer<T>
 {
     type Output = T;
 
-    #[inline]
+    /// 
     fn index(&self, index: usize) -> &Self::Output
     {
         let real_index = if index > self.len
@@ -73,7 +62,6 @@ impl<T> std::ops::Index<usize> for Buffer<T>
 }
 impl<T> std::ops::IndexMut<usize> for Buffer<T>
 {
-    #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output
     {
         let real_index = if index > self.len
@@ -89,27 +77,39 @@ impl<T> std::ops::IndexMut<usize> for Buffer<T>
         }
     }
 }
-impl<T> std::ops::Deref for Buffer<T>
+impl<T : Sized + Send + Sync> std::ops::Deref for Buffer<T>
 {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target
-    {
-        unsafe { self.buffer.as_ref() }.expect("Failed to Deref.")
-    }
+    type Target = [T];
+    fn deref(&self) -> &Self::Target { self.into_slice() }
 }
-impl<T> std::ops::DerefMut for Buffer<T>
+impl<T : Sized + Send + Sync> std::ops::DerefMut for Buffer<T> { fn deref_mut(&mut self) -> &mut Self::Target { self.into_slice_mut() } }
+unsafe impl<T> Send for Buffer<T> {}
+unsafe impl<T> Sync for Buffer<T> {}
+impl<T> Clone for Buffer<T>
 {
-    fn deref_mut(&mut self) -> &mut Self::Target
+    fn clone(&self) -> Self
     {
-        unsafe { self.buffer.as_mut() }.expect("Failed to DerefMut.")
+        unsafe { *self.count += 1 }
+        Self
+        {
+            buffer: self.buffer,
+            len: self.len,
+            count: self.count
+        }
     }
 }
 impl<T> Drop for Buffer<T>
 {
-    #[inline]
     fn drop(&mut self)
     {
+        unsafe
+        {
+            if *self.count > 1
+            {
+                *self.count -= 1;
+                return
+            }
+        }
         let layout = std::alloc::Layout::array::<T>(self.len);
         match layout
         {
@@ -130,20 +130,20 @@ pub struct PushBuffer<T>
 impl<T : Copy> PushBuffer<T>
 {
     ///New PushBuffer with length.
-    #[inline]
+
     pub fn new(len : usize) -> Result<Self, LayoutError>
     {
         let layout = Layout::array::<T>(len)?;
         unsafe { Ok(PushBuffer { buffer : alloc_zeroed(layout) as * mut T , index : 0, len : len }) }
     }
     ///New PushBuffer from raw pointer.
-    #[inline]
+
     pub fn from_raw(ptr : * mut T, len : usize) -> Self
     {
         Self { buffer : ptr, index : 0, len }
     }
     ///Resizes the buffer.
-    #[inline]
+
     pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
     {
         let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
@@ -156,19 +156,13 @@ impl<T : Copy> PushBuffer<T>
         Ok(())
     }
     ///Converts internal data chunk as silce
-    #[inline]
-    pub fn into_slice(&self) -> &[T]
-    {
-        unsafe { std::slice::from_raw_parts(self.buffer, self.len) }
-    }
+
+    pub fn into_slice(&self) -> &[T] { unsafe { std::slice::from_raw_parts(self.buffer, self.len) } }
     ///Converts internal data chunk as mutable silce
-    #[inline]
-    pub fn into_slice_mut(&self) -> &mut[T]
-    {
-        unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) }
-    }
+
+    pub fn into_slice_mut(&self) -> &mut[T] { unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) } }
     ///Pushes data to buffer.
-    #[inline]
+
     pub fn push(& mut self, value : T)
     {
         if self.index <= self.len
@@ -185,21 +179,17 @@ impl<T : Copy> PushBuffer<T>
                 }
         }
     }
-    #[inline]
     ///Get index.
     pub fn get_index(&self) -> usize { self.index }
     ///Set index.
-    #[inline]
     pub fn set_index(&mut self, index : usize) { self.index = index; }
     ///Returns the length of the buffer.
-    #[inline]
     pub fn len(& self) -> usize { return self.len; }
 }
 impl<T> std::ops::Index<usize> for PushBuffer<T>
 {
     type Output = T;
 
-    #[inline]
     fn index(& self, index : usize) -> & Self::Output
     {
         let real_index = if index > self.len
@@ -217,7 +207,6 @@ impl<T> std::ops::Index<usize> for PushBuffer<T>
 }
 impl<T> std::ops::IndexMut<usize> for PushBuffer<T>
 {
-    #[inline]
     fn index_mut(& mut self, index : usize) -> & mut Self::Output
     {
         let real_index = if index > self.len
@@ -233,25 +222,17 @@ impl<T> std::ops::IndexMut<usize> for PushBuffer<T>
         }
     }
 }
-impl<T> std::ops::Deref for PushBuffer<T>
+impl<T : Copy> std::ops::Deref for PushBuffer<T>
 {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target
-    {
-        unsafe { self.buffer.as_ref() }.expect("Failed to Deref.")
-    }
+    type Target = [T];
+    fn deref(&self) -> &Self::Target { self.into_slice() }
 }
-impl<T> std::ops::DerefMut for PushBuffer<T>
+impl<T : Copy> std::ops::DerefMut for PushBuffer<T>
 {
-    fn deref_mut(&mut self) -> &mut Self::Target
-    {
-        unsafe { self.buffer.as_mut() }.expect("Failed to DerefMut.")
-    }
+    fn deref_mut(&mut self) -> &mut Self::Target { self.into_slice_mut() }
 }
 impl<T> Drop for PushBuffer<T>
 {
-    #[inline]
     fn drop(&mut self)
     {
         let layout = Layout::array::<T>(self.len as usize);
@@ -275,20 +256,17 @@ pub struct CircularBuffer<T>
 impl<T : Copy> CircularBuffer<T>
 {
     ///New CircularBuffer with length.
-    #[inline]
+
     pub fn new(len : usize) -> Result<Self, LayoutError>
     {
         let layout = Layout::array::<T>(len)?;
         unsafe { Ok(CircularBuffer { buffer : alloc_zeroed(layout) as * mut T, read : 0, write : 0, len : len }) }
     }
     ///New CircularBuffer from raw pointer.
-    #[inline]
-    pub fn from_raw(ptr : * mut T, len : usize) -> Self
-    {
-        Self { buffer : ptr, read : 0, write : 0, len }
-    }
+
+    pub fn from_raw(ptr : * mut T, len : usize) -> Self { Self { buffer : ptr, read : 0, write : 0, len } }
     ///Resizes the buffer.
-    #[inline]
+
     pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
     {
         let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
@@ -304,26 +282,16 @@ impl<T : Copy> CircularBuffer<T>
         Ok(())
     }
     ///Converts internal data chunk as silce
-    #[inline]
-    pub fn into_slice(&self) -> &[T]
-    {
-        unsafe { std::slice::from_raw_parts(self.buffer, self.len) }
-    }
+    pub fn into_slice(&self) -> &[T] { unsafe { std::slice::from_raw_parts(self.buffer, self.len) } }
     ///Converts internal data chunk as mutable silce
-    #[inline]
-    pub fn into_slice_mut(&self) -> &mut[T]
-    {
-        unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) }
-    }
+    pub fn into_slice_mut(&self) -> &mut[T] { unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) } }
     ///Pushes data to buffer.
-    #[inline]
     pub fn push(& mut self, value : T)
     {
         unsafe { * self.buffer.offset(self.write as isize) = value; }
         if self.write < self.len() { self.write += 1; } else { self.write = 0; }
     }
     ///Reads next data of the buffer.
-    #[inline]
     pub fn next(& mut self) -> T
     {
         let value = unsafe { *self.buffer.offset(self.read as isize) };
@@ -331,34 +299,20 @@ impl<T : Copy> CircularBuffer<T>
         value
     }
     ///Initializes write index.
-    #[inline]
     pub fn init_write(& mut self, index : usize) { self.write = index; }
     ///Initializes read index.
-    #[inline]
     pub fn init_read(& mut self, index : usize) { self.write = index; }
     ///Returns the length of the buffer.
-    #[inline]
     pub fn len(& self) -> usize { return self.len; }
 }
-impl<T> std::ops::Deref for CircularBuffer<T>
+impl<T: Copy> std::ops::Deref for CircularBuffer<T>
 {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target
-    {
-        unsafe { self.buffer.as_ref() }.expect("Failed to Deref.")
-    }
+    type Target = [T];
+    fn deref(&self) -> &Self::Target { self.into_slice() }
 }
-impl<T> std::ops::DerefMut for CircularBuffer<T>
-{
-    fn deref_mut(&mut self) -> &mut Self::Target
-    {
-        unsafe { self.buffer.as_mut() }.expect("Failed to DerefMut.")
-    }
-}
+impl<T: Copy> std::ops::DerefMut for CircularBuffer<T> { fn deref_mut(&mut self) -> &mut Self::Target { self.into_slice_mut() } }
 impl<T> Drop for CircularBuffer<T>
 {
-    #[inline]
     fn drop(&mut self)
     {
         let layout = Layout::array::<T>(self.len as usize);
