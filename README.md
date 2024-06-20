@@ -8,7 +8,7 @@ Modular audio processing library including MKAU plugin format based on Rust.
 # Modules
 buffer : includes buffer, push buffer and circular buffer.
 
-simulation : includes convolution and saturation struct and function for audio processing.
+dsp : includes convolution, saturation, compression, limit struct and function for audio processing.
 
 processor : includes MKAU plugin format.
 
