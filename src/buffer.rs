@@ -5,7 +5,8 @@ pub struct Buffer<T>
 {
     buffer : *mut T,
     len : usize,
-    count : *mut usize
+    count : *mut usize,
+    lock : bool
 }
 impl<T : Sized + Send + Sync> Buffer<T>
 {
@@ -13,12 +14,12 @@ impl<T : Sized + Send + Sync> Buffer<T>
     pub fn new(len : usize) -> Result<Self,LayoutError>
     {
         let layout = std::alloc::Layout::array::<T>(len)?;
-        unsafe { Ok(Self { buffer : std::alloc::alloc_zeroed(layout) as * mut T , len, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize }) }
+        unsafe { Ok(Self { buffer : std::alloc::alloc_zeroed(layout) as * mut T , len, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize, lock : false }) }
     }
     /// New Buffer from raw pointer.
     pub fn from_raw(ptr : * mut T, len : usize) -> Self
     {
-        Self { buffer : ptr, len, count : unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) } as *mut usize }
+        Self { buffer : ptr, len, count : unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) } as *mut usize, lock : false }
     }
     /// Resizes the buffer.
     pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
@@ -39,12 +40,15 @@ impl<T : Sized + Send + Sync> Buffer<T>
     pub fn into_slice_mut(&self) -> &mut[T] { unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) } }
     /// Returns the length of the buffer.
     pub fn len(&self) -> usize { return self.len; }
+    /// Lock the buffer for data safety. Recommended to lock when writing the data.
+    pub fn lock(&mut self) { self.lock = true; }
+    /// Unlock the buffer for data sharing. Must be unlocked after writing is done.
+    pub fn unlock(&mut self) { self.lock = false; }
 }
 impl<T> std::ops::Index<usize> for Buffer<T>
 {
     type Output = T;
 
-    /// 
     fn index(&self, index: usize) -> &Self::Output
     {
         let real_index = if index > self.len
@@ -64,6 +68,7 @@ impl<T> std::ops::IndexMut<usize> for Buffer<T>
 {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output
     {
+        if self.lock { panic!("Not allowed to access while locked."); }
         let real_index = if index > self.len
         {
             eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
@@ -94,7 +99,8 @@ impl<T> Clone for Buffer<T>
         {
             buffer: self.buffer,
             len: self.len,
-            count: self.count
+            count: self.count,
+            lock : self.lock
         }
     }
 }
