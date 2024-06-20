@@ -1,126 +1,165 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout, LayoutError};
 
-/// Sized Buffer that can be used in multi-threaded environment, with reference count. Be conscious, this is unsafe from data hazards.
-pub struct Buffer<T>
+/// Sized Buffer that can be used in multi-threaded environment, with reference count and lock.
+pub struct Buffer<T : Clone + Default + Send + Sync>
 {
-    buffer : *mut T,
-    len : usize,
+    element : * mut T,
+    len : *mut usize,
+    lock : *mut bool,
+    locked_here : bool,
     count : *mut usize,
-    lock : bool
+    default : T
 }
-impl<T : Sized + Send + Sync> Buffer<T>
+impl<T : Clone + Default + Send + Sync> Buffer<T>
 {
     /// New Buffer with length.
-    pub fn new(len : usize) -> Result<Self,LayoutError>
+    pub fn new(len : usize) -> Self
     {
-        let layout = std::alloc::Layout::array::<T>(len)?;
-        unsafe { Ok(Self { buffer : std::alloc::alloc_zeroed(layout) as * mut T , len, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize, lock : false }) }
+        unsafe
+        {
+            let array_layout = std::alloc::Layout::array::<T>(len).unwrap();
+            Self
+            {
+                element : std::alloc::alloc_zeroed(array_layout) as * mut T,
+                len : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as * mut usize,
+                lock : std::alloc::alloc_zeroed(std::alloc::Layout::new::<bool>()) as * mut bool,
+                locked_here : false,
+                count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as * mut usize,
+                default : T::default()
+            }
+        }
     }
     /// New Buffer from raw pointer.
     pub fn from_raw(ptr : * mut T, len : usize) -> Self
     {
-        Self { buffer : ptr, len, count : unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) } as *mut usize, lock : false }
-    }
-    /// Resizes the buffer.
-    pub fn resize(&mut self, len : usize) -> Result<(), LayoutError>
-    {
-        let dealloc_layout = std::alloc::Layout::array::<T>(self.len)?;
-        let alloc_layout = std::alloc::Layout::array::<T>(len)?;
+        let lock = std::alloc::alloc_zeroed(std::alloc::Layout::new::<bool>()) as *mut bool;
         unsafe
         {
-            std::alloc::dealloc(self.buffer as * mut u8, dealloc_layout);
-            self.buffer = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
-            self.len = len;
+            *lock = false;
+            Self { buffer : ptr, len : &mut len, lock : lock, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize, default : T::default() }
         }
-        Ok(())
     }
-    /// Converts internal data chunk as silce
-    pub fn into_slice(&self) -> &[T] { unsafe { std::slice::from_raw_parts(self.buffer, self.len) } }
-    /// Converts internal data chunk as mutable silce
-    pub fn into_slice_mut(&self) -> &mut[T] { unsafe{ std::slice::from_raw_parts_mut(self.buffer, self.len) } }
-    /// Returns the length of the buffer.
-    pub fn len(&self) -> usize { return self.len; }
-    /// Lock the buffer for data safety. Recommended to lock when writing the data.
-    pub fn lock(&mut self) { self.lock = true; }
-    /// Unlock the buffer for data sharing. Must be unlocked after writing is done.
-    pub fn unlock(&mut self) { self.lock = false; }
+    /// Try to lock in time. True if success and false if failed.
+    pub fn try_lock(&mut self) -> bool
+    {
+        unsafe
+        {
+            if !*self.lock
+            {
+                *self.lock = true;
+                self.locked_here = true;
+                return true
+            }
+            false
+        }
+    }
+    /// Lock the buffer.
+    pub fn lock(&mut self)
+    {
+        unsafe
+        {
+            while *self.lock { std::thread::yield_now(); }
+            if !*self.lock
+            {
+                *self.lock = true;
+                self.locked_here = true;
+            }
+        }    
+    }
+    /// unlock the buffer.
+    pub fn unlock(&mut self)
+    {
+        if self.locked_here
+        {
+            unsafe { *self.lock = false; }
+            self.locked_here = false;
+        }
+    }
 }
-impl<T> std::ops::Index<usize> for Buffer<T>
+impl<T : Clone + Default + Send + Sync> std::ops::Index<usize> for Buffer<T>
 {
     type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output
-    {
-        let real_index = if index > self.len
-        {
-            eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
-            index % self.len
-        } else { index };
-        let data = unsafe { self.buffer.offset(real_index as isize).as_ref() };
-        match data
-        {
-            None => { panic!("Access to invalid memory"); }
-            Some(reference) => { return reference; }
-        }
-    }
+    fn index(&self, index: usize) -> &Self::Output { unsafe { self.element.offset((index % *self.len) as isize).as_ref().expect("No value assigned.") } }
 }
-impl<T> std::ops::IndexMut<usize> for Buffer<T>
+impl<T : Clone + Default + Send + Sync> std::ops::IndexMut<usize> for Buffer<T>
 {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output
+    fn index_mut(& mut self, index: usize) -> & mut Self::Output
     {
-        if self.lock { panic!("Not allowed to access while locked."); }
-        let real_index = if index > self.len
+        unsafe
         {
-            eprintln!("Index out of range. Indexing to remain of given index divided by size of buffer");
-            index % self.len
-        } else { index };
-        let data = unsafe { self.buffer.offset(real_index as isize).as_mut() };
-        match data
-        {
-            None => { panic!("Access to invalid memory"); }
-            Some(reference) => { return reference; }
+            if *self.lock && self.locked_here { return self.element.offset((index % *self.len) as isize).as_mut().expect("No value assigned.") }
+            else if !self.locked_here
+            {
+                eprintln!("Buffer was locked somewhere else.");
+                return &mut self.default
+            }
+            eprintln!("Buffer was not locked.");
+            &mut self.default
         }
     }
 }
-impl<T : Sized + Send + Sync> std::ops::Deref for Buffer<T>
+impl<T : Clone + Default + Send + Sync> AsRef<[T]> for Buffer<T> { fn as_ref(&self) -> &[T] { unsafe { std::slice::from_raw_parts(self.element, *self.len) } } }
+impl<T : Clone + Default + Send + Sync> AsMut<[T]> for Buffer<T>
+{
+    fn as_mut(&mut self) -> &mut [T]
+    {
+        unsafe
+        {
+            if *self.lock && self.locked_here { return std::slice::from_raw_parts_mut(self.element, *self.len) }
+            else if !self.locked_here
+            {
+                eprintln!("Buffer was locked somewhere else.");
+                return std::slice::from_mut(&mut self.default)
+            }
+            eprintln!("Buffer was not locked.");
+            std::slice::from_mut(&mut self.default)
+        }
+    }
+}
+impl<T : Clone + Default + Send + Sync> std::ops::Deref for Buffer<T>
 {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { self.into_slice() }
+    fn deref(&self) -> &Self::Target { self.as_ref() }
 }
-impl<T : Sized + Send + Sync> std::ops::DerefMut for Buffer<T> { fn deref_mut(&mut self) -> &mut Self::Target { self.into_slice_mut() } }
-unsafe impl<T> Send for Buffer<T> {}
-unsafe impl<T> Sync for Buffer<T> {}
-impl<T> Clone for Buffer<T>
+impl<T : Clone + Default + Send + Sync> std::ops::DerefMut for Buffer<T> { fn deref_mut(&mut self) -> &mut Self::Target { self.as_mut() } }
+impl<T : Clone + Default + Send + Sync> Clone for Buffer<T>
 {
     fn clone(&self) -> Self
     {
-        unsafe { *self.count += 1 }
-        Self
+        unsafe 
         {
-            buffer: self.buffer,
-            len: self.len,
-            count: self.count,
-            lock : self.lock
+            *self.count += 1;
+            Self
+            {
+                element : self.element,
+                len : self.len,
+                lock : self.lock,
+                locked_here : false,
+                count : self.count,
+                default : T::default()
+            }
         }
     }
 }
-impl<T> Drop for Buffer<T>
+unsafe impl<T : Clone + Default + Send + Sync> Send for Buffer<T> {}
+unsafe impl<T : Clone + Default + Send + Sync> Sync for Buffer<T> {}
+impl<T : Clone + Default + Send + Sync> Drop for Buffer<T>
 {
     fn drop(&mut self)
     {
         unsafe
         {
-            if *self.count > 1
+            if *self.count > 0
             {
+                if *self.locked_here { *self.lock = false; }
                 *self.count -= 1;
                 return
             }
-        }
-        let layout = std::alloc::Layout::array::<T>(self.len);
-        match layout
-        {
-            Ok(layout) => { unsafe { std::alloc::dealloc(self.buffer as * mut u8, layout) }; },
-            Err(error) => { eprintln!("drop failed : {}", error); }
+            let array_layout = std::alloc::Layout::array::<T>(*self.len).unwrap();
+            std::alloc::dealloc(self.element as *mut u8, array_layout);
+            std::alloc::dealloc(self.len as *mut u8, std::alloc::Layout::new::<usize>());
+            std::alloc::dealloc(self.lock as *mut u8, std::alloc::Layout::new::<bool>());
+            std::alloc::dealloc(self.count as *mut u8, std::alloc::Layout::new::<usize>());
         }
     }
 }
