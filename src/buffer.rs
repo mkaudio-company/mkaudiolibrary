@@ -12,7 +12,7 @@ pub struct Buffer<T : Clone + Default + Send + Sync>
 }
 impl<T : Clone + Default + Send + Sync> Buffer<T>
 {
-    /// New Buffer with length.
+    /// Create new Buffer with length.
     pub fn new(len : usize) -> Self
     {
         unsafe
@@ -29,14 +29,32 @@ impl<T : Clone + Default + Send + Sync> Buffer<T>
             }
         }
     }
-    /// New Buffer from raw pointer.
-    pub fn from_raw(ptr : * mut T, len : usize) -> Self
+    /// Get length of the Buffer.
+    pub fn len(&self) -> usize { unsafe { *self.len } }
+    /// resize the Buffer.
+    pub fn resize(&mut self, new_len : usize)
     {
-        let lock = std::alloc::alloc_zeroed(std::alloc::Layout::new::<bool>()) as *mut bool;
+        let alloc_layout = std::alloc::Layout::array::<T>(new_len).unwrap();
+        let dealloc_layout = std::alloc::Layout::array::<T>(self.len()).unwrap();
         unsafe
         {
+            let element = std::alloc::alloc_zeroed(alloc_layout) as * mut T;
+            std::ptr::copy_nonoverlapping(self.element, element, std::cmp::min(self.len(), new_len));
+            std::alloc::dealloc(self.element as * mut u8, dealloc_layout);
+            self.element = element;
+            *self.len = new_len;
+        }
+    }
+    /// New Buffer from raw pointer.
+    pub fn from_raw(ptr : * mut T, length : usize) -> Self
+    {
+        unsafe
+        {
+            let len = std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as * mut usize;
+            *len = length;
+            let lock = std::alloc::alloc_zeroed(std::alloc::Layout::new::<bool>()) as *mut bool;
             *lock = false;
-            Self { buffer : ptr, len : &mut len, lock : lock, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize, default : T::default() }
+            Self { element : ptr, len, lock, locked_here : false, count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as *mut usize, default : T::default() }
         }
     }
     /// Try to lock in time. True if success and false if failed.
@@ -141,6 +159,27 @@ impl<T : Clone + Default + Send + Sync> Clone for Buffer<T>
         }
     }
 }
+impl<T : Clone + Default + Send + Sync> Default for Buffer<T>
+{
+    fn default() -> Self
+    {
+        unsafe
+        {
+            let lock = std::alloc::alloc_zeroed(std::alloc::Layout::new::<bool>()) as * mut bool;
+            *lock = false;
+            Self
+            {
+                element : std::ptr::null_mut(),
+                len : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as * mut usize,
+                lock,
+                locked_here : false,
+                count : std::alloc::alloc_zeroed(std::alloc::Layout::new::<usize>()) as * mut usize,
+                default : T::default()
+            }
+        }
+        
+    }
+}
 unsafe impl<T : Clone + Default + Send + Sync> Send for Buffer<T> {}
 unsafe impl<T : Clone + Default + Send + Sync> Sync for Buffer<T> {}
 impl<T : Clone + Default + Send + Sync> Drop for Buffer<T>
@@ -151,7 +190,7 @@ impl<T : Clone + Default + Send + Sync> Drop for Buffer<T>
         {
             if *self.count > 0
             {
-                if *self.locked_here { *self.lock = false; }
+                if self.locked_here { *self.lock = false; }
                 *self.count -= 1;
                 return
             }

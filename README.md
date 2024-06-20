@@ -6,13 +6,15 @@
 Modular audio processing library including MKAU plugin format based on Rust.
 
 # Modules
-buffer : includes push buffer and circular buffer.
+buffer : includes buffer, push buffer and circular buffer.
 
 simulation : includes convolution and saturation struct and function for audio processing.
 
 processor : includes MKAU plugin format.
 
 # Version
+0.2.2 - Updated lock, unlock, and len for data safety.
+
 0.2.1 - Added lock and unlock for buffer for data safety.
 
 0.2.0 - Updated processor loader and documentation for processor. Added basic compressor, limiter, and delay.

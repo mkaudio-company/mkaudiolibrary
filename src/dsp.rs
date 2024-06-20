@@ -12,7 +12,7 @@ pub fn ratio_to_db(ratio : f64) -> f64 { ratio.log10() / 20.0 }
 pub fn db_to_ratio(db : f64) -> f64 { 10.0f64.powf(db / 20.0) }
 
 ///Buffer and window for convolution. Buffer stores data for continuation. Generic T must be either f32 or f64.
-pub struct Convolution<T>
+pub struct Convolution<T : Clone + Default + Send + Sync>
 {
     buffer : PushBuffer<T>,
     window : Buffer<T>
