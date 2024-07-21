@@ -13,6 +13,8 @@ dsp : includes convolution, saturation, compression, limit struct and function f
 processor : includes MKAU plugin format.
 
 # Version
+0.2.3 - Added audiofile module, inspired from Adam Stark's AudioFile library(https://github.com/adamstark/AudioFile).
+
 0.2.2 - Updated lock, unlock, and len for data safety.
 
 0.2.1 - Added lock and unlock for buffer for data safety.
