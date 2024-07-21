@@ -9,7 +9,7 @@ readme = "README.md"
 homepage = "https://github.com/mkaudio-company/mkaudiolibrary"
 repository = "https://github.com/mkaudio-company/mkaudiolibrary"
 keywords = ["audio", "signal-processing"]
-categories = ["audio"]
+categories = ["multimedia::audio"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
