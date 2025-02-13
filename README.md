@@ -3,9 +3,11 @@
 [![](https://docs.rs/mkaudiolibrary/badge.svg)](https://docs.rs/mkaudiolibrary/)
 
 # mkaudiolibrary
+
 Modular audio processing library including MKAU plugin format based on Rust.
 
 # Modules
+
 buffer : includes buffer, push buffer and circular buffer.
 
 dsp : includes convolution, saturation, compression, limit struct and function for audio processing.
@@ -13,6 +15,9 @@ dsp : includes convolution, saturation, compression, limit struct and function f
 processor : includes MKAU plugin format.
 
 # Version
+
+0.3.0 - Reconstructed sized buffer, used slice instead of buffer for plugins.
+
 0.2.3 - Added audiofile module, inspired from Adam Stark's AudioFile library(https://github.com/adamstark/AudioFile).
 
 0.2.2 - Updated lock, unlock, and len for data safety.
@@ -58,6 +63,7 @@ processor : includes MKAU plugin format.
 0.1.0 - Initial version.
 
 # License
+
 The library is offered under GPLv3.0 license for open source usage.
 
 If you want to use mkaudiolibrary for closed source project, please email to minjaekim@mkaudio.company for agreement and support.

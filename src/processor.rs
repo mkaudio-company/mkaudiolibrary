@@ -22,7 +22,7 @@
 //!     fn open_window(&self) { todo!() }
 //!     fn close_window(&self) { todo!() }
 //!     fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize) { self.internal_buffer.resize(buffer_size).unwrap(); }
-//!     fn run(& self, input: &Buffer<Buffer<f64>>, sidechain_in: &Buffer<Buffer<f64>>, output: &mut Buffer<Buffer<f64>>, sidechain_out: &mut Buffer<Buffer<f64>>)
+//!     fn run(& self, input: &[&[f64]], sidechain_in: &[&[f64]], output: &mut [ &mut [f64]], sidechain_out: &mut [ &mut [f64]])
 //!     {
 //!         for channel in 0..input.len() { for sample in 0..input[channel].len() { output[channel][sample] = input[channel][sample] * self.parameters[0].1; } }
 //!     }
@@ -32,8 +32,6 @@
 
 extern crate libloading;
 use libloading::{Library, Symbol};
-
-use crate::buffer::Buffer;
 
 /// Declare plugin.
 #[macro_export]
@@ -70,8 +68,8 @@ pub trait Processor
     ///Prepare internal methods for play.
     fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize);
     ///Process with the plugin. Optional sidechain I/O. Buffer size of I/O must be same.
-    fn run(& self, input: &Buffer<Buffer<f64>>, sidechain_in : &Buffer<Buffer<f64>>,
-           output: &mut Buffer<Buffer<f64>>, sidechain_out : &mut Buffer<Buffer<f64>>);
+    fn run(& self, input: &[&[f64]], sidechain_in : &[&[f64]],
+           output: &mut [&mut [f64]], sidechain_out : &mut [&mut [f64]]);
 }
 ///Loads plugin.
 pub fn load(path : &str, name : &str) -> Result<Box<dyn Processor>, libloading::Error>
@@ -80,7 +78,7 @@ pub fn load(path : &str, name : &str) -> Result<Box<dyn Processor>, libloading::
     {
         let file = format!("{}/{}.mkap", path, name);
         let lib = Library::new(&file)?;
-        let constructor : Symbol<unsafe extern fn() -> * mut dyn Processor> = lib.get(b"_create\0")?;
+        let constructor : Symbol<unsafe fn() -> * mut dyn Processor> = lib.get(b"_create\0")?;
         let mut plugin = Box::from_raw(constructor());
         plugin.init();
         Ok(plugin)
