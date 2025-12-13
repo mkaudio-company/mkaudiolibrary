@@ -4,66 +4,374 @@
 
 # mkaudiolibrary
 
-Modular audio processing library including MKAU plugin format based on Rust.
+A Rust library for real-time audio signal processing, featuring analog modeling through numeric functions and circuit simulation via Modified Nodal Analysis (MNA).
 
-# Modules
+## Features
 
-buffer : includes buffer, push buffer and circular buffer.
+- **Thread-safe buffers** with `RwLock`-based concurrent access
+- **Analog modeling** for tube/tape-style saturation with asymmetric parameters
+- **Circuit simulation** with real-time transient analysis using MNA
+- **DSP primitives** including convolution, compression, limiting, and delay
+- **Audio file I/O** for WAV and AIFF formats with Buffer integration
+- **Plugin system** via MKAU format for modular processing chains
+- **Zero-copy design** with boxed slices for minimal allocation overhead
 
-dsp : includes convolution, saturation, compression, limit struct and function for audio processing.
+## Installation
 
-processor : includes MKAU plugin format.
+Add to your `Cargo.toml`:
 
-# Version
+```toml
+[dependencies]
+mkaudiolibrary = "1.0"
+```
 
-0.3.0 - Reconstructed sized buffer, used slice instead of buffer for plugins.
+## Quick Start
 
-0.2.3 - Added audiofile module, inspired from Adam Stark's AudioFile library(https://github.com/adamstark/AudioFile).
+```rust
+use mkaudiolibrary::audiofile::{AudioFile, FileFormat};
+use mkaudiolibrary::dsp::Compression;
+use mkaudiolibrary::buffer::Buffer;
 
-0.2.2 - Updated lock, unlock, and len for data safety.
+// Load an audio file
+let mut audio = AudioFile::default();
+audio.load("input.wav");
 
-0.2.1 - Added lock and unlock for buffer for data safety.
+println!("Loaded: {} channels, {} samples, {}Hz",
+    audio.num_channel(),
+    audio.num_sample(),
+    audio.sample_rate()
+);
 
-0.2.0 - Updated processor loader and documentation for processor. Added basic compressor, limiter, and delay.
+// Convert to thread-safe buffers for processing
+let buffers = audio.to_buffers();
 
-0.1.21 - Modified Buffer for unsafe multithread processing with reference count, appended usage of convolution to any number type, changed I/O of processor.
+// Apply compression to each channel
+let mut comp = Compression::new(audio.sample_rate() as f64);
+comp.threshold = -12.0;
+comp.ratio = 4.0;
 
-0.1.20 - Added Deref, DerefMut for buffers.
+for buffer in &buffers {
+    let output = Buffer::new(buffer.len());
+    comp.run(buffer, &output);
+    // ... copy processed output back
+}
 
-0.1.17, 0.1.18, 0.1.19 - Corrected processor IO types.
+// Save result
+audio.save("output.wav", FileFormat::Wav);
+```
 
-0.1.16 - Changed process function IO to mono. We recommend to use internal buffer for linking.
+## Modules
 
-0.1.15 - Added open_window and close_window and edited example code for Processor.
+### buffer
 
-0.1.14 - Added from_raw function for Buffers.
+Thread-safe audio buffers designed for concurrent multi-threaded access:
 
-0.1.13 - Buffers return LayoutError when error occured allocating buffer, added resize, into_slice, and into_slice_mut functions for Buffers.
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `Buffer<T>` | General-purpose buffer with read/write locking | Sample storage, inter-thread communication |
+| `PushBuffer<T>` | FIFO buffer that shifts samples on push | FIR filters, convolution |
+| `CircularBuffer<T>` | Ring buffer with power-of-2 sizing | Delay lines, lookahead buffers |
 
-0.1.12 - Changen I/O type of methonds of simulation and Processor trait into Buffer.
+All buffers use `Arc<RwLock<...>>` internally, allowing multiple concurrent readers or exclusive write access.
 
-0.1.11 - Added Buffer for simple format of audio buffer. Inline-abled processing functions.
+```rust
+use mkaudiolibrary::buffer::Buffer;
+use std::thread;
 
-0.1.10 - Used boxed slice for Saturation for block processing. Always inlined processing functions.
+let buffer = Buffer::<f64>::new(1024);
+let buffer_clone = buffer.clone();  // Shares underlying data
 
-0.1.9 - Used boxed slice instead of CircularBuffer for Processor.
+// Writer thread
+let writer = thread::spawn(move || {
+    let mut guard = buffer_clone.write();
+    for i in 0..1024 {
+        guard[i] = (i as f64 / 1024.0).sin();
+    }
+});
 
-0.1.8 - Used boxed slice instead of CircularBuffer for Convolution.
+writer.join().unwrap();
 
-0.1.7 - Create Convolution struct. Dropped next and state reference for processor and convolution.
+// Reader thread
+let guard = buffer.read();
+println!("First sample: {}", guard[0]);
+```
 
-0.1.6 - Used raw pointer for buffers instead of Box<T>, and implied Drop trait. Minor fix to functions.
+### dsp
 
-0.1.5 - Minor fix.
+Audio processing components organized by category:
 
-0.1.4 - Omitted unnecessary multithreading and optional for better performance.
+#### Utility Functions
 
-0.1.1 - 0.1.3 - Documentation update.
+```rust
+use mkaudiolibrary::dsp::{ratio_to_db, db_to_ratio};
 
-0.1.0 - Initial version.
+let db = ratio_to_db(2.0);      // ~6.02 dB
+let ratio = db_to_ratio(-6.0);  // ~0.5
+```
 
-# License
+#### Saturation (Analog Modeling)
 
-The library is offered under GPLv3.0 license for open source usage.
+Asymmetric logarithmic saturation model for analog-style harmonic generation:
 
-If you want to use mkaudiolibrary for closed source project, please email to minjaekim@mkaudio.company for agreement and support.
+- **Alpha parameters** - Independent drive/knee control for positive and negative signals
+- **Beta parameters** - Separate compression/gain characteristics per polarity
+- **Delta parameter** - DC bias offset for curve positioning
+- **Gamma parameter** - Boolean polarity inversion
+
+```rust
+use mkaudiolibrary::dsp::Saturation;
+use mkaudiolibrary::buffer::Buffer;
+
+let sat = Saturation::new(
+    10.0, 10.0,   // alpha_plus, alpha_minus (drive)
+    1.0, 1.0,     // beta_plus, beta_minus (compression)
+    0.0,          // delta (bias)
+    false         // flip polarity
+);
+
+// Process single sample
+let output = sat.process(0.8);
+
+// Process buffer
+let input = Buffer::from_slice(&[0.0, 0.5, 1.0, -0.5, -1.0]);
+let output = Buffer::new(5);
+sat.run(&input, &output);
+```
+
+#### Circuit Simulation (Modified Nodal Analysis)
+
+Sample-by-sample circuit analysis for real-time filtering:
+
+- **Component library** - Resistors, capacitors, and inductors with companion model discretization
+- **Gaussian elimination** solver with partial pivoting
+- **Single preprocessing step** builds the static admittance matrix
+- **Per-sample updates** for reactive element state
+
+```rust
+use mkaudiolibrary::dsp::{Circuit, Resistor, Capacitor, Inductor};
+
+// Create an RC lowpass filter: fc = 1/(2πRC) ≈ 159Hz
+let mut circuit = Circuit::new(44100.0, 2);
+circuit.add_component(Box::new(Resistor::new(1, 2, 1000.0)));   // 1kΩ
+circuit.add_component(Box::new(Capacitor::new(2, 0, 1e-6)));    // 1µF
+
+// Build Y matrix (call once before processing)
+circuit.preprocess(10.0);
+
+// Process samples
+for input_sample in audio_input {
+    let output = circuit.process(input_sample, 2);  // Input voltage, probe node 2
+}
+```
+
+#### Dynamics Processing
+
+```rust
+use mkaudiolibrary::dsp::{Compression, Limit};
+use mkaudiolibrary::buffer::Buffer;
+
+// Compressor with soft knee
+let mut compressor = Compression::new(44100.0);
+compressor.threshold = -20.0;  // dB
+compressor.ratio = 4.0;        // 4:1
+compressor.attack = 10.0;      // ms
+compressor.release = 100.0;    // ms
+compressor.makeup = 6.0;       // dB
+compressor.knee = 6.0;         // dB (soft knee width)
+
+// Brickwall limiter
+let mut limiter = Limit::new(44100.0);
+limiter.gain = 0.0;            // dB input gain
+limiter.ceiling = -0.1;        // dB output ceiling
+limiter.release = 100.0;       // ms
+
+// Process buffers
+let input = Buffer::new(1024);
+let output = Buffer::new(1024);
+compressor.run(&input, &output);
+```
+
+#### Time-Based Effects
+
+```rust
+use mkaudiolibrary::dsp::{Convolution, Delay};
+use mkaudiolibrary::buffer::Buffer;
+
+// Convolution with impulse response
+let impulse_response = vec![1.0, 0.5, 0.25, 0.125];
+let conv = Convolution::new(&impulse_response).unwrap();
+
+let input = Buffer::new(1024);
+let output = Buffer::new(1024);
+conv.run(&input, &output);
+
+// Feedback delay
+let mut delay = Delay::new(250.0, 44100.0);  // 250ms delay
+delay.feedback = 0.5;  // 50% feedback
+delay.mix = 0.5;       // 50% wet
+```
+
+### audiofile
+
+Load and save audio files with automatic format detection:
+
+```rust
+use mkaudiolibrary::audiofile::{AudioFile, FileFormat};
+
+// Load audio file (WAV or AIFF auto-detected)
+let mut audio = AudioFile::default();
+audio.load("song.wav");
+
+// Inspect file properties
+println!("Format: {:?}", audio.format());
+println!("Channels: {}", audio.num_channel());
+println!("Samples: {}", audio.num_sample());
+println!("Sample rate: {} Hz", audio.sample_rate());
+println!("Bit depth: {}", audio.bit_depth());
+println!("Duration: {:.2} seconds", audio.length());
+
+// Direct channel access
+if let Some(left) = audio.channel(0) {
+    let peak = left.iter().fold(0.0_f64, |max, &s| max.max(s.abs()));
+    println!("Peak level: {:.4}", peak);
+}
+
+// Modify samples
+if let Some(left) = audio.channel_mut(0) {
+    for sample in left.iter_mut() {
+        *sample *= 0.5;  // Apply -6dB gain
+    }
+}
+
+// Save in different format
+audio.set_bit_depth(24);
+audio.save("output.aiff", FileFormat::Aiff);
+```
+
+#### Buffer Integration
+
+Seamlessly integrate with thread-safe buffers for DSP processing:
+
+```rust
+use mkaudiolibrary::audiofile::AudioFile;
+use mkaudiolibrary::buffer::Buffer;
+
+let mut audio = AudioFile::default();
+audio.load("input.wav");
+
+// Convert to thread-safe buffers
+let buffers = audio.to_buffers();
+
+// Process each channel in parallel (example)
+// ... parallel processing ...
+
+// Copy results back
+audio.from_buffers(&buffers);
+```
+
+### processor
+
+MKAU plugin format for modular audio processing chains:
+
+```rust
+use mkaudiolibrary::processor::{Processor, load};
+
+// Load a plugin
+let plugin = load("/path/to/plugins", "myplugin").expect("Failed to load");
+println!("Loaded: {}", plugin.name());
+
+// Prepare for playback
+plugin.prepare_to_play(512, 44100);
+
+// Process audio
+let input: Vec<&[f64]> = vec![&left_in, &right_in];
+let mut output: Vec<&mut [f64]> = vec![&mut left_out, &mut right_out];
+plugin.run(&input, &[], &mut output, &mut []);
+```
+
+#### Creating Plugins
+
+```rust
+use mkaudiolibrary::processor::Processor;
+use mkaudiolibrary::buffer::Buffer;
+
+struct GainPlugin {
+    gain: f64,
+}
+
+impl Processor for GainPlugin {
+    fn init(&mut self) {}
+    fn name(&self) -> String { String::from("Gain") }
+    fn get_parameter(&self, _index: usize) -> f64 { self.gain }
+    fn set_parameter(&mut self, _index: usize, value: f64) { self.gain = value; }
+    fn get_parameter_name(&self, _index: usize) -> String { String::from("Gain") }
+    fn open_window(&self) {}
+    fn close_window(&self) {}
+    fn prepare_to_play(&mut self, _buffer_size: usize, _sample_rate: usize) {}
+
+    fn run(&self, input: &[&[f64]], _sidechain_in: &[&[f64]],
+           output: &mut [&mut [f64]], _sidechain_out: &mut [&mut [f64]]) {
+        for ch in 0..input.len() {
+            for i in 0..input[ch].len() {
+                output[ch][i] = input[ch][i] * self.gain;
+            }
+        }
+    }
+}
+
+// Export as dynamic library
+mkaudiolibrary::declare_plugin!(GainPlugin, GainPlugin::new);
+```
+
+## Thread Safety
+
+All buffer types implement `Send + Sync` and use interior mutability with `RwLock`:
+
+| Operation | Behavior |
+|-----------|----------|
+| `buffer.read()` | Returns `BufferReadGuard`, multiple allowed |
+| `buffer.write()` | Returns `BufferWriteGuard`, exclusive access |
+| `buffer.clone()` | Creates new handle to same data (like `Arc`) |
+
+Guards automatically release locks when dropped (RAII pattern).
+
+## Supported Audio Formats
+
+| Format | Extension | Read | Write | Notes |
+|--------|-----------|------|-------|-------|
+| WAV | `.wav` | Yes | Yes | PCM, IEEE Float |
+| AIFF | `.aiff`, `.aif` | Yes | Yes | Uncompressed, AIFC |
+
+Supported bit depths: 8, 16, 24, 32-bit
+
+## Changelog
+
+### 1.0.0
+- Major update with thread-safe buffers using `RwLock`
+- New saturation model with asymmetric numeric modeling
+- Circuit simulation with MNA solver
+- Refined compression and limiting with proper envelope detection
+- Enhanced audiofile module with Buffer integration
+- Comprehensive documentation for all modules
+
+### 0.3.0
+- Reconstructed sized buffer, used slice instead of buffer for plugins
+
+### 0.2.x
+- Added audiofile module
+- Lock/unlock mechanisms for data safety
+- Updated processor loader and documentation
+
+### 0.1.x
+- Initial development versions
+- Buffer implementations with reference counting
+- Basic DSP components
+
+## License
+
+This library is dual-licensed:
+
+- **GPL-3.0** for open source projects
+- **Commercial license** available for closed source usage
+
+For commercial licensing inquiries, contact: minjaekim@mkaudio.company

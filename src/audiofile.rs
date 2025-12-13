@@ -1,4 +1,121 @@
-const AIFF_SAMPLE_RATE_TABLE : [(usize, [u8;10]); 19] = 
+//! Audio file loading and saving for WAV and AIFF formats.
+//!
+//! This module provides functionality to read and write audio files in WAV and AIFF
+//! formats. All audio data is stored internally as normalized `f64` samples in the
+//! range -1.0 to 1.0.
+//!
+//! # Supported Formats
+//!
+//! - **WAV** - RIFF WAVE format with PCM encoding
+//! - **AIFF** - Audio Interchange File Format (uncompressed and compressed/AIFC)
+//!
+//! # Supported Bit Depths
+//!
+//! Both reading and writing support:
+//! - 8-bit (signed integer)
+//! - 16-bit (signed integer)
+//! - 24-bit (signed integer)
+//! - 32-bit (signed integer or IEEE float for WAV)
+//!
+//! # Sample Representation
+//!
+//! Regardless of the source file's bit depth, samples are stored internally as
+//! normalized `f64` values:
+//! - Full scale positive: +1.0
+//! - Full scale negative: -1.0
+//! - Silence: 0.0
+//!
+//! When saving, samples are clamped to the -1.0 to 1.0 range before quantization.
+//!
+//! # Buffer Integration
+//!
+//! The `AudioFile` struct integrates with the thread-safe `Buffer<T>` type for
+//! DSP processing pipelines:
+//!
+//! ```ignore
+//! use mkaudiolibrary::audiofile::{AudioFile, FileFormat};
+//! use mkaudiolibrary::dsp::Compression;
+//!
+//! // Load audio file
+//! let mut audio = AudioFile::default();
+//! audio.load("input.wav");
+//!
+//! // Convert to buffers for processing
+//! let mut buffers = audio.to_buffers();
+//!
+//! // Process with DSP (e.g., compression)
+//! let mut compressor = Compression::new(audio.sample_rate() as f64);
+//! // ... apply processing ...
+//!
+//! // Copy processed data back
+//! audio.from_buffers(&buffers);
+//!
+//! // Save result
+//! audio.save("output.wav", FileFormat::Wav);
+//! ```
+//!
+//! # Example Usage
+//!
+//! ## Loading and Inspecting
+//!
+//! ```ignore
+//! use mkaudiolibrary::audiofile::AudioFile;
+//!
+//! let mut audio = AudioFile::default();
+//! audio.load("song.wav");
+//!
+//! println!("Channels: {}", audio.num_channel());
+//! println!("Samples: {}", audio.num_sample());
+//! println!("Sample rate: {} Hz", audio.sample_rate());
+//! println!("Bit depth: {}", audio.bit_depth());
+//! println!("Duration: {:.2} seconds", audio.length());
+//! ```
+//!
+//! ## Creating and Saving
+//!
+//! ```ignore
+//! use mkaudiolibrary::audiofile::{AudioFile, FileFormat};
+//!
+//! // Create stereo file with 44100 samples (1 second at 44.1kHz)
+//! let mut audio = AudioFile::new(2, 44100);
+//! audio.set_sample_rate(44100);
+//! audio.set_bit_depth(16);
+//!
+//! // Generate a 440Hz sine wave on left channel
+//! for i in 0..44100 {
+//!     let t = i as f64 / 44100.0;
+//!     let sample = (2.0 * std::f64::consts::PI * 440.0 * t).sin();
+//!     audio.set_sample(0, i, sample);
+//! }
+//!
+//! audio.save("sine.wav", FileFormat::Wav);
+//! ```
+//!
+//! ## Direct Channel Access
+//!
+//! ```ignore
+//! use mkaudiolibrary::audiofile::AudioFile;
+//!
+//! let mut audio = AudioFile::default();
+//! audio.load("input.wav");
+//!
+//! // Read-only access to channel data
+//! if let Some(left) = audio.channel(0) {
+//!     let peak = left.iter().fold(0.0_f64, |max, &s| max.max(s.abs()));
+//!     println!("Peak level: {:.4}", peak);
+//! }
+//!
+//! // Mutable access for in-place processing
+//! if let Some(left) = audio.channel_mut(0) {
+//!     for sample in left.iter_mut() {
+//!         *sample *= 0.5; // Apply -6dB gain
+//!     }
+//! }
+//! ```
+
+// Lookup table for AIFF extended precision sample rate encoding.
+// Maps common sample rates to their 80-bit IEEE 754 extended precision representation.
+const AIFF_SAMPLE_RATE_TABLE : [(usize, [u8;10]); 19] =
 [
     (8000, [64, 11, 250, 0, 0, 0, 0, 0, 0, 0]),
     (11025, [64, 12, 172, 68, 0, 0, 0, 0, 0, 0]),
@@ -62,13 +179,20 @@ enum AIFFAudioFormat
     Error
 }
 
-/// File format of audio file to open.
+/// Audio file format identifier.
+///
+/// Used to specify the format when saving files and to identify the format
+/// of loaded files.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FileFormat
 {
+    /// No valid format detected (parsing failed or unknown format).
     None,
+    /// File has not been loaded yet (default state).
     NotLoaded,
+    /// WAV format (RIFF WAVE).
     Wav,
+    /// AIFF format (Audio Interchange File Format).
     Aiff
 }
 impl FileFormat
@@ -92,9 +216,39 @@ enum Endianness
     Little
 }
 
+use crate::buffer::Buffer;
+
+/// Audio file container for loading, manipulating, and saving audio data.
+///
+/// `AudioFile` provides a unified interface for working with WAV and AIFF audio files.
+/// Audio data is stored as normalized `f64` samples regardless of the source file's
+/// bit depth, enabling consistent processing across different formats.
+///
+/// # Structure
+///
+/// Audio data is organized as a vector of channels, where each channel contains
+/// a vector of samples. Channel 0 is typically left, channel 1 is right for stereo files.
+///
+/// # Thread Safety
+///
+/// `AudioFile` itself is not thread-safe. For concurrent processing, convert channels
+/// to thread-safe `Buffer<f64>` using [`to_buffer`] or [`to_buffers`], process in
+/// parallel, then copy results back with [`from_buffer`] or [`from_buffers`].
+///
+/// # iXML Metadata
+///
+/// The `xml_chunk` field provides access to iXML metadata embedded in audio files.
+/// This is commonly used for broadcast metadata in professional audio workflows.
+///
+/// [`to_buffer`]: AudioFile::to_buffer
+/// [`to_buffers`]: AudioFile::to_buffers
+/// [`from_buffer`]: AudioFile::from_buffer
+/// [`from_buffers`]: AudioFile::from_buffers
 pub struct AudioFile
 {
-    pub audio_buffer : Vec<Vec<f64>>,
+    audio_buffer : Vec<Vec<f64>>,
+    /// iXML metadata chunk from the audio file.
+    /// Empty string if no iXML chunk is present.
     pub xml_chunk : String,
     file_format : FileFormat,
     sample_rate : usize,
@@ -102,17 +256,53 @@ pub struct AudioFile
 }
 impl AudioFile
 {
-    /// Load audio file from path.
+    /// Create a new empty audio file with the given channel count and sample count.
+    ///
+    /// All samples are initialized to 0.0 (silence). Default sample rate is 44100 Hz
+    /// and default bit depth is 16-bit.
+    ///
+    /// # Arguments
+    /// * `channels` - Number of audio channels (1 for mono, 2 for stereo, etc.)
+    /// * `samples` - Number of samples per channel
+    pub fn new(channels : usize, samples : usize) -> Self
+    {
+        Self
+        {
+            audio_buffer: vec![vec![0.0; samples]; channels],
+            xml_chunk: String::new(),
+            file_format: FileFormat::None,
+            sample_rate: 44100,
+            bit_depth: 16
+        }
+    }
+
+    /// Load audio file from a file path.
+    ///
+    /// Automatically detects the file format (WAV or AIFF) based on the file header.
+    /// On success, populates all audio data and metadata. On failure, prints an error
+    /// message to stderr.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the audio file
     pub fn load(&mut self, path : &str)
     {
         if let Ok(mut file) = std::fs::File::open(path)
         {
             let mut buffer = vec![];
-            if let Err(error) = std::io::Read::read(&mut file, &mut buffer) { eprintln!("{}", error); }
-            self.load_bytes(&buffer);
+            if let Err(error) = std::io::Read::read_to_end(&mut file, &mut buffer) { eprintln!("{}", error); }
+            else { self.load_bytes(&buffer); }
         }
+        else { eprintln!("ERROR: Failed to open file: {}", path); }
     }
-    /// Save audio file in path.
+
+    /// Save audio file to the specified path in the given format.
+    ///
+    /// Samples are clamped to -1.0 to 1.0 before quantization. The file is written
+    /// with the current bit depth and sample rate settings.
+    ///
+    /// # Arguments
+    /// * `path` - Destination file path
+    /// * `format` - Output format (`FileFormat::Wav` or `FileFormat::Aiff`)
     pub fn save(&self, path : &str, format : FileFormat)
     {
         match format
@@ -122,7 +312,14 @@ impl AudioFile
             _ => {}
         }
     }
-    /// Load audio file from bytes.
+
+    /// Load audio file from a byte slice.
+    ///
+    /// Useful for loading audio from memory buffers or embedded resources.
+    /// Automatically detects the file format based on the header bytes.
+    ///
+    /// # Arguments
+    /// * `data` - Raw file bytes
     pub fn load_bytes(&mut self, data : &[u8])
     {
         self.file_format = FileFormat::determine(data);
@@ -133,33 +330,184 @@ impl AudioFile
             _ => {}
         }
     }
-    /// Get channel count of the file.
+
+    /// Get a read-only slice of samples for a specific channel.
+    ///
+    /// # Arguments
+    /// * `index` - Channel index (0 = left, 1 = right for stereo)
+    ///
+    /// # Returns
+    /// `Some(&[f64])` if the channel exists, `None` otherwise.
+    pub fn channel(&self, index : usize) -> Option<&[f64]>
+    {
+        self.audio_buffer.get(index).map(|v| v.as_slice())
+    }
+
+    /// Get a mutable slice of samples for a specific channel.
+    ///
+    /// Allows direct modification of sample data for in-place processing.
+    ///
+    /// # Arguments
+    /// * `index` - Channel index (0 = left, 1 = right for stereo)
+    ///
+    /// # Returns
+    /// `Some(&mut [f64])` if the channel exists, `None` otherwise.
+    pub fn channel_mut(&mut self, index : usize) -> Option<&mut [f64]>
+    {
+        self.audio_buffer.get_mut(index).map(|v| v.as_mut_slice())
+    }
+
+    /// Get a single sample value at the specified channel and sample index.
+    ///
+    /// # Arguments
+    /// * `channel` - Channel index
+    /// * `sample` - Sample index within the channel
+    ///
+    /// # Returns
+    /// `Some(f64)` if the indices are valid, `None` otherwise.
+    pub fn get_sample(&self, channel : usize, sample : usize) -> Option<f64>
+    {
+        self.audio_buffer.get(channel).and_then(|c| c.get(sample).copied())
+    }
+
+    /// Set a single sample value at the specified channel and sample index.
+    ///
+    /// Silently ignores invalid indices.
+    ///
+    /// # Arguments
+    /// * `channel` - Channel index
+    /// * `sample` - Sample index within the channel
+    /// * `value` - Sample value (typically in range -1.0 to 1.0)
+    pub fn set_sample(&mut self, channel : usize, sample : usize, value : f64)
+    {
+        if let Some(ch) = self.audio_buffer.get_mut(channel)
+        {
+            if let Some(s) = ch.get_mut(sample) { *s = value; }
+        }
+    }
+
+    /// Convert a single channel to a thread-safe `Buffer` for DSP processing.
+    ///
+    /// Creates a new `Buffer` containing a copy of the channel data. The buffer
+    /// can be safely shared across threads for parallel processing.
+    ///
+    /// # Arguments
+    /// * `channel` - Channel index to convert
+    ///
+    /// # Returns
+    /// `Some(Buffer<f64>)` if the channel exists, `None` otherwise.
+    pub fn to_buffer(&self, channel : usize) -> Option<Buffer<f64>>
+    {
+        self.audio_buffer.get(channel).map(|c| Buffer::from_slice(c))
+    }
+
+    /// Copy processed data from a `Buffer` back to a channel.
+    ///
+    /// Copies up to the minimum of the channel length and buffer length.
+    /// Use this after processing audio with DSP components.
+    ///
+    /// # Arguments
+    /// * `channel` - Channel index to copy to
+    /// * `buffer` - Source buffer containing processed samples
+    pub fn from_buffer(&mut self, channel : usize, buffer : &Buffer<f64>)
+    {
+        if let Some(ch) = self.audio_buffer.get_mut(channel)
+        {
+            let guard = buffer.read();
+            let len = ch.len().min(guard.len());
+            ch[..len].copy_from_slice(&guard[..len]);
+        }
+    }
+
+    /// Convert all channels to thread-safe `Buffer` instances.
+    ///
+    /// Useful for parallel processing of multi-channel audio. Each buffer
+    /// is independent and can be processed in a separate thread.
+    ///
+    /// # Returns
+    /// A vector of `Buffer<f64>`, one per channel.
+    pub fn to_buffers(&self) -> Vec<Buffer<f64>>
+    {
+        self.audio_buffer.iter().map(|c| Buffer::from_slice(c)).collect()
+    }
+
+    /// Copy processed data from `Buffer` instances back to all channels.
+    ///
+    /// Pairs buffers with channels by index. If there are fewer buffers than
+    /// channels, only the first N channels are updated.
+    ///
+    /// # Arguments
+    /// * `buffers` - Slice of buffers containing processed samples
+    pub fn from_buffers(&mut self, buffers : &[Buffer<f64>])
+    {
+        for (channel, buffer) in self.audio_buffer.iter_mut().zip(buffers.iter())
+        {
+            let guard = buffer.read();
+            let len = channel.len().min(guard.len());
+            channel[..len].copy_from_slice(&guard[..len]);
+        }
+    }
+
+    /// Get the number of channels in the audio file.
     pub fn num_channel(&self) -> usize { self.audio_buffer.len() }
-    /// Get sample count per channel.
-    pub fn num_sample(&self) -> usize { if self.audio_buffer.len() > 0 { self.audio_buffer[0].len() } else { 0 } }
-    /// Return true if the file is mono.
+
+    /// Get the number of samples per channel.
+    pub fn num_sample(&self) -> usize { if self.audio_buffer.is_empty() { 0 } else { self.audio_buffer[0].len() } }
+
+    /// Check if the audio file is mono (single channel).
     pub fn is_mono(&self) -> bool { self.audio_buffer.len() == 1 }
-    /// Return true if the file is stereo.
+
+    /// Check if the audio file is stereo (two channels).
     pub fn is_stereo(&self) -> bool { self.audio_buffer.len() == 2 }
-    /// Get bit depth of the file.
+
+    /// Get the bit depth of the audio file.
     pub fn bit_depth(&self) -> usize { self.bit_depth }
-    /// Get sample rate of the file.
+
+    /// Get the sample rate of the audio file in Hz.
     pub fn sample_rate(&self) -> usize { self.sample_rate }
-    /// Set length in second.
+
+    /// Get the duration of the audio file in seconds.
     pub fn length(&self) -> f64 { self.num_sample() as f64 / self.sample_rate as f64 }
-    /// Set buffer size of the file.
+
+    /// Get the file format of the loaded audio file.
+    pub fn format(&self) -> FileFormat { self.file_format }
+
+    /// Resize the audio buffer to the specified channel and sample count.
+    ///
+    /// New samples are initialized to 0.0. Existing samples are preserved
+    /// if the new size is larger.
+    ///
+    /// # Arguments
+    /// * `channel` - New number of channels
+    /// * `sample` - New number of samples per channel
     pub fn set_buffer_size(&mut self, channel : usize, sample : usize)
     {
         self.audio_buffer.resize(channel, vec![0.0; sample]);
         for channel in &mut self.audio_buffer { channel.resize(sample, 0.0); }
     }
-    /// Set channel count of the file.
+
+    /// Set the number of channels, preserving existing sample count.
+    ///
+    /// # Arguments
+    /// * `count` - New number of channels
     pub fn set_channels(&mut self, count : usize) { self.audio_buffer.resize(count, vec![0.0; self.num_sample()]); }
-    /// Set sample count per channel.
+
+    /// Set the number of samples per channel, preserving existing channel count.
+    ///
+    /// # Arguments
+    /// * `count` - New number of samples per channel
     pub fn set_samples(&mut self, count : usize) { for buffer in &mut self.audio_buffer { buffer.resize(count, 0.0); } }
-    /// Set bit depth of the file.
+
+    /// Set the bit depth for saving (8, 16, 24, or 32).
+    ///
+    /// # Arguments
+    /// * `bit_depth` - Bit depth value
     pub fn set_bit_depth(&mut self, bit_depth : usize) { self.bit_depth = bit_depth; }
-    /// Set sample rate of the file.
+
+    /// Set the sample rate in Hz.
+    ///
+    /// # Arguments
+    /// * `sample_rate` - Sample rate value (e.g., 44100, 48000, 96000)
     pub fn set_sample_rate(&mut self, sample_rate : usize) { self.sample_rate = sample_rate }
     fn read_wav(&mut self, buffer : &[u8])
     {
