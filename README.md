@@ -23,28 +23,28 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mkaudiolibrary = "1.4"
+mkaudiolibrary = "1.4.1"
 ```
 
 For real-time audio streaming, enable the `realtime` feature:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.4", features = ["realtime"] }
+mkaudiolibrary = { version = "1.4.1", features = ["realtime"] }
 ```
 
 For MIDI support with mkmidilibrary integration:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.4", features = ["midi"] }
+mkaudiolibrary = { version = "1.4.1", features = ["midi"] }
 ```
 
 For GUI support with mkgraphic integration:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.4", features = ["gui"] }
+mkaudiolibrary = { version = "1.4.1", features = ["gui"] }
 ```
 
 ## Quick Start
