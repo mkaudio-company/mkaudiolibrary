@@ -7,7 +7,7 @@
 //!
 //! ```ignore
 //! use mkaudiolibrary::buffer::Buffer;
-//! use mkaudiolibrary::processor::Processor;
+//! use mkaudiolibrary::processor::{Processor, AudioIO};
 //!
 //! struct GainPlugin
 //! {
@@ -42,21 +42,46 @@
 //!         self.internal_buffer.resize(buffer_size);
 //!     }
 //!
-//!     fn run(&self, input : &[&[f64]], _sidechain_in : &[&[f64]],
-//!            output : &mut [&mut [f64]], _sidechain_out : &mut [&mut [f64]])
+//!     fn run(&self, audio : &mut AudioIO)
 //!     {
 //!         let gain = self.parameters[0].1;
-//!         for channel in 0..input.len()
+//!         let num_channels = audio.input.len().min(audio.output.len());
+//!         for channel in 0..num_channels
 //!         {
-//!             for sample in 0..input[channel].len()
+//!             let input_guard = audio.input[channel].read();
+//!             let mut output_guard = audio.output[channel].write();
+//!             for sample in 0..input_guard.len().min(output_guard.len())
 //!             {
-//!                 output[channel][sample] = input[channel][sample] * gain;
+//!                 output_guard[sample] = input_guard[sample] * gain;
 //!             }
 //!         }
 //!     }
 //! }
 //!
 //! mkaudiolibrary::declare_plugin!(GainPlugin, GainPlugin::new);
+//! ```
+//!
+//! ## MIDI Processing Example (requires `midi` feature)
+//!
+//! ```ignore
+//! #[cfg(feature = "midi")]
+//! use mkaudiolibrary::processor::{Processor, AudioIO, MidiIO};
+//!
+//! #[cfg(feature = "midi")]
+//! fn process_with_midi(processor: &dyn Processor, audio: &mut AudioIO, midi: &mut MidiIO)
+//! {
+//!     // Process incoming MIDI messages
+//!     for msg in &midi.input
+//!     {
+//!         // Handle MIDI messages (note on/off, CC, etc.)
+//!     }
+//!
+//!     // Run audio processing
+//!     processor.run(audio);
+//!
+//!     // Optionally generate MIDI output
+//!     // midi.output.push(MidiMessage::NoteOn { channel: 0, key: 60, velocity: 100 });
+//! }
 //! ```
 //!
 //! ## Loading Plugins
@@ -71,6 +96,183 @@
 
 extern crate libloading;
 use libloading::{Library, Symbol};
+
+use crate::buffer::Buffer;
+
+#[cfg(feature = "midi")]
+pub use mkmidilibrary::midi::MidiMessage;
+
+/// Audio I/O container for buffer-based processing.
+///
+/// Provides access to audio input/output buffers and optional sidechain buffers.
+/// Each buffer is a `Buffer<f64>` that can be safely shared across threads.
+///
+/// # Example
+/// ```ignore
+/// fn process(audio: &mut AudioIO)
+/// {
+///     for ch in 0..audio.input.len().min(audio.output.len())
+///     {
+///         let input = audio.input[ch].read();
+///         let mut output = audio.output[ch].write();
+///         for i in 0..input.len()
+///         {
+///             output[i] = input[i];
+///         }
+///     }
+/// }
+/// ```
+
+pub enum ChannelLayout
+{
+    Mono,
+    Stereo,
+    LCR,
+    Quad,
+    Surround5p1,
+    Surround7p1,
+    Surround7p1p2,
+    Surround7p1p4
+}
+impl ChannelLayout
+{
+    pub fn num_channels(&self) -> usize
+    {
+        match self
+        {
+            ChannelLayout::Mono => 1,
+            ChannelLayout::Stereo => 2,
+            ChannelLayout::LCR => 3,
+            ChannelLayout::Quad =>4,
+            ChannelLayout::Surround5p1 => 6,
+            ChannelLayout::Surround7p1 => 8,
+            ChannelLayout::Surround7p1p2 => 10,
+            ChannelLayout::Surround7p1p4 => 12,
+        }
+    }
+}
+
+pub struct AudioIO
+{
+    /// Input audio buffers (one per channel).
+    pub input : Vec<Buffer<f64>>,
+    /// Output audio buffers (one per channel).
+    pub output : Vec<Buffer<f64>>,
+    /// Sidechain input buffers (optional, one per channel).
+    pub sidechain_in : Vec<Buffer<f64>>,
+    /// Sidechain output buffers (optional, one per channel).
+    pub sidechain_out : Vec<Buffer<f64>>
+}
+
+impl AudioIO
+{
+    /// Create a new AudioIO with the specified channel counts and buffer size.
+    ///
+    /// # Arguments
+    /// * `input_channels` - Number of input channels
+    /// * `output_channels` - Number of output channels
+    /// * `sidechain_in_channels` - Number of sidechain input channels
+    /// * `sidechain_out_channels` - Number of sidechain output channels
+    /// * `buffer_size` - Size of each buffer in samples
+    pub fn new(input_channels : usize, output_channels : usize,
+               sidechain_in_channels : usize, sidechain_out_channels : usize,
+               buffer_size : usize) -> Self
+    {
+        Self
+        {
+            input : (0..input_channels).map(|_| Buffer::new(buffer_size)).collect(),
+            output : (0..output_channels).map(|_| Buffer::new(buffer_size)).collect(),
+            sidechain_in : (0..sidechain_in_channels).map(|_| Buffer::new(buffer_size)).collect(),
+            sidechain_out : (0..sidechain_out_channels).map(|_| Buffer::new(buffer_size)).collect()
+        }
+    }
+
+    /// Create an AudioIO with layout.
+    pub fn set_channel(layout : ChannelLayout, buffer_size : usize) -> Self
+    {
+        Self::new(layout.num_channels(), layout.num_channels(), 0, 0, buffer_size)
+    }
+
+    /// Resize all buffers to a new size.
+    pub fn resize(&mut self, buffer_size : usize)
+    {
+        for buf in &self.input { buf.resize(buffer_size); }
+        for buf in &self.output { buf.resize(buffer_size); }
+        for buf in &self.sidechain_in { buf.resize(buffer_size); }
+        for buf in &self.sidechain_out { buf.resize(buffer_size); }
+    }
+}
+
+impl Default for AudioIO
+{
+    fn default() -> Self { Self::set_channel(ChannelLayout::Stereo, 1024) }
+}
+
+/// MIDI I/O container for MIDI message processing.
+///
+/// Provides input and output vectors for MIDI messages. The input contains
+/// messages received during the current processing block, and output is
+/// for messages to be sent after processing.
+///
+/// Only available with the `midi` feature enabled.
+///
+/// # Example
+/// ```ignore
+/// #[cfg(feature = "midi")]
+/// fn process_midi(midi: &mut MidiIO)
+/// {
+///     for msg in &midi.input
+///     {
+///         match msg
+///         {
+///             MidiMessage::NoteOn { channel, key, velocity } =>
+///             {
+///                 // Handle note on
+///             }
+///             MidiMessage::ControlChange { channel, controller, value } =>
+///             {
+///                 // Handle CC
+///             }
+///             _ => {}
+///         }
+///     }
+///     // Clear input after processing
+///     midi.input.clear();
+/// }
+/// ```
+#[cfg(feature = "midi")]
+pub struct MidiIO
+{
+    /// Incoming MIDI messages for the current processing block.
+    pub input : Box<[Option<MidiMessage>]>,
+    /// Outgoing MIDI messages to be sent after processing.
+    pub output : Box<[Option<MidiMessage>]>
+}
+
+#[cfg(feature = "midi")]
+impl MidiIO
+{
+    /// Create a new empty MidiIO.
+    pub fn new(buffer_size : usize) -> Self
+    {
+        Self
+        {
+            input : vec![None; buffer_size].into_boxed_slice(),
+            output : vec![None; buffer_size].into_boxed_slice(),
+        }
+    }
+    pub fn resize(&mut self, buffer_size : usize)
+    {
+        self.input = vec![None; buffer_size].into_boxed_slice();
+        self.output = vec![None; buffer_size].into_boxed_slice();
+    }
+}
+
+#[cfg(feature = "midi")]
+impl Default for MidiIO
+{
+    fn default() -> Self { Self::new(1024) }
+}
 
 /// Declare a plugin for dynamic loading.
 ///
@@ -100,6 +302,15 @@ macro_rules! declare_plugin
 ///
 /// Implement this trait to create an audio plugin that can be loaded
 /// dynamically or used directly in a processing chain.
+///
+/// ## Audio I/O
+/// The `run` method uses `AudioIO` which contains thread-safe `Buffer<f64>` types
+/// for input, output, and sidechain channels. Access buffer data using `.read()`
+/// for inputs and `.write()` for outputs.
+///
+/// ## MIDI Support
+/// When the `midi` feature is enabled, use `run_with_midi` for processors that
+/// need MIDI input/output. The default implementation calls `run` and ignores MIDI.
 pub trait Processor
 {
     /// Initialize the processor after loading.
@@ -136,14 +347,35 @@ pub trait Processor
     /// Process audio through the plugin.
     ///
     /// # Arguments
-    /// * `input` - Input audio channels (slice of channel slices)
-    /// * `sidechain_in` - Sidechain input channels (optional)
-    /// * `output` - Output audio channels (mutable)
-    /// * `sidechain_out` - Sidechain output channels (optional)
+    /// * `audio` - Audio I/O container with input/output/sidechain buffers
     ///
-    /// All buffers must have the same sample count per channel.
-    fn run(&self, input : &[&[f64]], sidechain_in : &[&[f64]],
-           output : &mut [&mut [f64]], sidechain_out : &mut [&mut [f64]]);
+    /// # Example
+    /// ```ignore
+    /// fn run(&self, audio : &mut AudioIO)
+    /// {
+    ///     for ch in 0..audio.input.len().min(audio.output.len())
+    ///     {
+    ///         let input = audio.input[ch].read();
+    ///         let mut output = audio.output[ch].write();
+    ///         for i in 0..input.len()
+    ///         {
+    ///             output[i] = input[i] * self.gain;
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    fn run(&self, audio : &mut AudioIO);
+
+    /// Process audio with MIDI input/output.
+    ///
+    /// Only available with the `midi` feature enabled.
+    /// Default implementation calls `run` and ignores MIDI data.
+    ///
+    /// # Arguments
+    /// * `audio` - Audio I/O container with input/output/sidechain buffers
+    /// * `midi` - MIDI I/O container with input/output message vectors
+    #[cfg(feature = "midi")]
+    fn run_with_midi(&self, audio : &mut AudioIO, midi : &mut MidiIO);
 }
 
 /// Load a plugin from a `.mkap` dynamic library file.

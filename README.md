@@ -23,14 +23,21 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mkaudiolibrary = "1.0"
+mkaudiolibrary = "1.3"
 ```
 
 For real-time audio streaming, enable the `realtime` feature:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.0", features = ["realtime"] }
+mkaudiolibrary = { version = "1.3", features = ["realtime"] }
+```
+
+For MIDI support with mkmidilibrary integration:
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "1.3", features = ["midi"] }
 ```
 
 ## Quick Start
@@ -321,10 +328,10 @@ audio.save_bwf("output_bwf.wav");
 
 ### processor
 
-MKAU plugin format for modular audio processing chains:
+MKAU plugin format for modular audio processing chains with thread-safe Buffer-based I/O:
 
 ```rust
-use mkaudiolibrary::processor::{Processor, load};
+use mkaudiolibrary::processor::{Processor, AudioIO, load};
 
 // Load a plugin
 let plugin = load("/path/to/plugins", "myplugin").expect("Failed to load");
@@ -333,16 +340,17 @@ println!("Loaded: {}", plugin.name());
 // Prepare for playback
 plugin.prepare_to_play(512, 44100);
 
+// Create audio I/O buffers
+let mut audio = AudioIO::stereo(512);
+
 // Process audio
-let input: Vec<&[f64]> = vec![&left_in, &right_in];
-let mut output: Vec<&mut [f64]> = vec![&mut left_out, &mut right_out];
-plugin.run(&input, &[], &mut output, &mut []);
+plugin.run(&mut audio);
 ```
 
 #### Creating Plugins
 
 ```rust
-use mkaudiolibrary::processor::Processor;
+use mkaudiolibrary::processor::{Processor, AudioIO};
 use mkaudiolibrary::buffer::Buffer;
 
 struct GainPlugin {
@@ -359,11 +367,12 @@ impl Processor for GainPlugin {
     fn close_window(&self) {}
     fn prepare_to_play(&mut self, _buffer_size: usize, _sample_rate: usize) {}
 
-    fn run(&self, input: &[&[f64]], _sidechain_in: &[&[f64]],
-           output: &mut [&mut [f64]], _sidechain_out: &mut [&mut [f64]]) {
-        for ch in 0..input.len() {
-            for i in 0..input[ch].len() {
-                output[ch][i] = input[ch][i] * self.gain;
+    fn run(&self, audio: &mut AudioIO) {
+        for ch in 0..audio.input.len().min(audio.output.len()) {
+            let input = audio.input[ch].read();
+            let mut output = audio.output[ch].write();
+            for i in 0..input.len() {
+                output[i] = input[i] * self.gain;
             }
         }
     }
@@ -371,6 +380,28 @@ impl Processor for GainPlugin {
 
 // Export as dynamic library
 mkaudiolibrary::declare_plugin!(GainPlugin, GainPlugin::new);
+```
+
+#### MIDI Processing (requires `midi` feature)
+
+```rust
+#[cfg(feature = "midi")]
+use mkaudiolibrary::processor::{Processor, AudioIO, MidiIO, MidiMessage};
+
+// Process with MIDI
+let mut audio = AudioIO::stereo(512);
+let mut midi = MidiIO::new(512);
+
+// Add MIDI input messages
+midi.input[0] = Some(MidiMessage::note_on(0, 60, 100));
+
+// Run processor with MIDI
+plugin.run_with_midi(&mut audio, &mut midi);
+
+// Check MIDI output
+for msg in midi.output.iter().flatten() {
+    println!("MIDI out: {:?}", msg);
+}
 ```
 
 ### realtime (Optional Feature)
@@ -518,6 +549,12 @@ Guards automatically release locks when dropped (RAII pattern).
 Supported bit depths: 8, 16, 24, 32-bit
 
 ## Changelog
+
+### 1.3.0
+- **Buffer-based Processor I/O**: Changed `Processor::run()` to use `AudioIO` struct with thread-safe `Buffer<f64>` types
+- **MIDI support**: New `midi` feature with `MidiIO` struct and `run_with_midi()` method
+- **mkmidilibrary integration**: Re-exports `MidiMessage` from mkmidilibrary for MIDI event handling
+- `AudioIO` provides `stereo()`, `mono()`, and `new()` constructors for flexible channel configurations
 
 ### 1.2.0
 - BWF (Broadcast Wave Format) support with `bext` chunk for broadcast metadata
