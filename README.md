@@ -23,21 +23,28 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mkaudiolibrary = "1.3"
+mkaudiolibrary = "1.4"
 ```
 
 For real-time audio streaming, enable the `realtime` feature:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.3", features = ["realtime"] }
+mkaudiolibrary = { version = "1.4", features = ["realtime"] }
 ```
 
 For MIDI support with mkmidilibrary integration:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.3", features = ["midi"] }
+mkaudiolibrary = { version = "1.4", features = ["midi"] }
+```
+
+For GUI support with mkgraphic integration:
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "1.4", features = ["gui"] }
 ```
 
 ## Quick Start
@@ -363,9 +370,12 @@ impl Processor for GainPlugin {
     fn get_parameter(&self, _index: usize) -> f64 { self.gain }
     fn set_parameter(&mut self, _index: usize, value: f64) { self.gain = value; }
     fn get_parameter_name(&self, _index: usize) -> String { String::from("Gain") }
-    fn open_window(&self) {}
-    fn close_window(&self) {}
     fn prepare_to_play(&mut self, _buffer_size: usize, _sample_rate: usize) {}
+
+    #[cfg(feature = "gui")]
+    fn get_view(&self) -> Option<&View> { None }
+    #[cfg(feature = "gui")]
+    fn get_view_mut(&mut self) -> Option<&mut View> { None }
 
     fn run(&self, audio: &mut AudioIO) {
         for ch in 0..audio.input.len().min(audio.output.len()) {
@@ -375,6 +385,11 @@ impl Processor for GainPlugin {
                 output[i] = input[i] * self.gain;
             }
         }
+    }
+
+    #[cfg(feature = "midi")]
+    fn run_with_midi(&self, audio: &mut AudioIO, _midi: &mut MidiIO) {
+        self.run(audio);
     }
 }
 
@@ -549,6 +564,11 @@ Guards automatically release locks when dropped (RAII pattern).
 Supported bit depths: 8, 16, 24, 32-bit
 
 ## Changelog
+
+### 1.4.0
+- **GUI support**: New `gui` feature with mkgraphic integration for plugin UI
+- Replaced `open_window()`/`close_window()` with `get_view()`, `get_view_mut()`, and `get_preferred_size()` methods
+- Re-exports `View`, `Window`, `WindowBuilder`, `Extent`, `Point` from mkgraphic
 
 ### 1.3.0
 - **Buffer-based Processor I/O**: Changed `Processor::run()` to use `AudioIO` struct with thread-safe `Buffer<f64>` types

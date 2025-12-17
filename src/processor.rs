@@ -34,8 +34,11 @@
 //!     fn get_parameter(&self, index : usize) -> f64 { self.parameters[index].1 }
 //!     fn set_parameter(&mut self, index : usize, value : f64) { self.parameters[index].1 = value; }
 //!     fn get_parameter_name(&self, index : usize) -> String { self.parameters[index].0.clone() }
-//!     fn open_window(&self) {}
-//!     fn close_window(&self) {}
+//!
+//!     #[cfg(feature = "gui")]
+//!     fn get_view(&self) -> Option<&View> { None }
+//!     #[cfg(feature = "gui")]
+//!     fn get_view_mut(&mut self) -> Option<&mut View> { None }
 //!
 //!     fn prepare_to_play(&mut self, buffer_size : usize, _sample_rate : usize)
 //!     {
@@ -55,6 +58,12 @@
 //!                 output_guard[sample] = input_guard[sample] * gain;
 //!             }
 //!         }
+//!     }
+//!
+//!     #[cfg(feature = "midi")]
+//!     fn run_with_midi(&self, audio : &mut AudioIO, _midi : &mut MidiIO)
+//!     {
+//!         self.run(audio);
 //!     }
 //! }
 //!
@@ -84,6 +93,24 @@
 //! }
 //! ```
 //!
+//! ## GUI Example (requires `gui` feature)
+//!
+//! ```ignore
+//! #[cfg(feature = "gui")]
+//! use mkaudiolibrary::processor::{Processor, AudioIO, View, Window, WindowBuilder, Extent};
+//!
+//! #[cfg(feature = "gui")]
+//! fn open_plugin_window(processor: &dyn Processor)
+//! {
+//!     if let Some(view) = processor.get_view()
+//!     {
+//!         let size = processor.get_preferred_size();
+//!         let window = WindowBuilder::new(processor.name().as_str(), size).build();
+//!         window.show();
+//!     }
+//! }
+//! ```
+//!
 //! ## Loading Plugins
 //!
 //! ```ignore
@@ -101,6 +128,11 @@ use crate::buffer::Buffer;
 
 #[cfg(feature = "midi")]
 pub use mkmidilibrary::midi::MidiMessage;
+
+#[cfg(feature = "gui")]
+pub use mkgraphic::prelude::{View, Window, Extent, Point};
+#[cfg(feature = "gui")]
+pub use mkgraphic::host::WindowBuilder;
 
 /// Audio I/O container for buffer-based processing.
 ///
@@ -330,11 +362,37 @@ pub trait Processor
     /// Get the display name of a parameter by index.
     fn get_parameter_name(&self, index : usize) -> String;
 
-    /// Open the plugin's UI window.
-    fn open_window(&self);
+    /// Get the plugin's UI view.
+    ///
+    /// Only available with the `gui` feature enabled.
+    /// Returns the View containing the plugin's UI elements.
+    ///
+    /// # Example
+    /// ```ignore
+    /// #[cfg(feature = "gui")]
+    /// fn get_view(&self) -> Option<&View>
+    /// {
+    ///     self.view.as_ref()
+    /// }
+    /// ```
+    #[cfg(feature = "gui")]
+    fn get_view(&self) -> Option<&View>;
 
-    /// Close the plugin's UI window.
-    fn close_window(&self);
+    /// Get a mutable reference to the plugin's UI view.
+    ///
+    /// Only available with the `gui` feature enabled.
+    #[cfg(feature = "gui")]
+    fn get_view_mut(&mut self) -> Option<&mut View>;
+
+    /// Get the preferred window size for the plugin UI.
+    ///
+    /// Only available with the `gui` feature enabled.
+    /// Returns the preferred width and height as an Extent.
+    #[cfg(feature = "gui")]
+    fn get_preferred_size(&self) -> Extent
+    {
+        Extent::new(400.0, 300.0)
+    }
 
     /// Prepare the processor for playback.
     /// Called before audio processing begins or when buffer size/sample rate changes.
