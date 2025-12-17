@@ -2,7 +2,7 @@
 name = "mkaudiolibrary"
 description = "Modular audio processing library including MKAU plugin format based on Rust."
 license = "GPL-3.0"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 documentation = "https://docs.rs/mkaudiolibrary"
 readme = "README.md"
@@ -13,6 +13,20 @@ categories = ["multimedia::audio"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = []
+realtime = []
+
 [dependencies]
 libloading = "0.8.3"
 no_denormals = "0.1.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = { version = "0.10", optional = true }
+coreaudio-sys = { version = "0.2", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_System_Threading"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = { version = "0.9", optional = true }

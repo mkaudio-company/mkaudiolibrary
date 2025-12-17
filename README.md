@@ -14,6 +14,7 @@ A Rust library for real-time audio signal processing, featuring analog modeling 
 - **DSP primitives** including convolution, compression, limiting, and delay
 - **Audio file I/O** for WAV and AIFF formats with Buffer integration
 - **Plugin system** via MKAU format for modular processing chains
+- **Real-time streaming** via RTAudio-style API (optional `realtime` feature)
 - **Zero-copy design** with boxed slices for minimal allocation overhead
 
 ## Installation
@@ -23,6 +24,13 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 mkaudiolibrary = "1.0"
+```
+
+For real-time audio streaming, enable the `realtime` feature:
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "1.0", features = ["realtime"] }
 ```
 
 ## Quick Start
@@ -323,6 +331,128 @@ impl Processor for GainPlugin {
 mkaudiolibrary::declare_plugin!(GainPlugin, GainPlugin::new);
 ```
 
+### realtime (Optional Feature)
+
+Real-time audio streaming I/O inspired by the C++ RTAudio library. Enable with the `realtime` feature.
+
+#### Supported Backends
+
+| Platform | Backend | API |
+|----------|---------|-----|
+| macOS | CoreAudio | `Api::CoreAudio` |
+| Windows | WASAPI | `Api::Wasapi` |
+| Linux | ALSA | `Api::Alsa` |
+
+#### Basic Usage
+
+```rust
+use mkaudiolibrary::realtime::{Realtime, StreamParameters, AudioCallback};
+
+// Create audio interface (auto-detects best API)
+let mut audio = Realtime::new(None).unwrap();
+
+// List available devices
+for id in audio.get_device_ids() {
+    if let Ok(info) = audio.get_device_info(id) {
+        println!("{}: {} (in:{}, out:{})",
+            info.id, info.name,
+            info.input_channels, info.output_channels);
+    }
+}
+
+// Define audio callback
+let callback: AudioCallback = Box::new(|output, input, frames, _time, _status| {
+    // Simple pass-through with gain
+    for i in 0..output.len() {
+        output[i] = input.get(i).copied().unwrap_or(0.0) * 0.5;
+    }
+    0  // Return 0 to continue, 1 to stop, 2 to abort
+});
+
+// Configure output stream
+let output_params = StreamParameters {
+    device_id: audio.get_default_output_device(),
+    num_channels: 2,
+    first_channel: 0,
+};
+
+// Configure input stream
+let input_params = StreamParameters {
+    device_id: audio.get_default_input_device(),
+    num_channels: 2,
+    first_channel: 0,
+};
+
+// Open duplex stream
+audio.open_stream(
+    Some(&output_params),
+    Some(&input_params),
+    44100,  // Sample rate
+    256,    // Buffer frames
+    callback,
+    None,   // Optional stream options
+).unwrap();
+
+// Start streaming
+audio.start_stream().unwrap();
+
+// ... do work ...
+
+// Stop and cleanup
+audio.stop_stream().unwrap();
+audio.close_stream();
+```
+
+#### Stereo Processing Helper
+
+```rust
+use mkaudiolibrary::realtime::{stereo_callback, Realtime, StreamParameters};
+
+// Create callback that works with separate L/R channels
+let callback = stereo_callback(|left_in, right_in, left_out, right_out, frames| {
+    for i in 0..frames {
+        // Simple stereo processing
+        left_out[i] = left_in[i] * 0.8;
+        right_out[i] = right_in[i] * 0.8;
+    }
+});
+
+let mut audio = Realtime::new(None).unwrap();
+// ... configure and open stream with callback ...
+```
+
+#### Buffer Integration
+
+```rust
+use mkaudiolibrary::realtime::{deinterleave, interleave, AudioCallback};
+use mkaudiolibrary::buffer::Buffer;
+use mkaudiolibrary::dsp::Compression;
+use std::sync::{Arc, Mutex};
+
+// Shared DSP processor
+let compressor = Arc::new(Mutex::new(Compression::new(44100.0)));
+let comp_clone = compressor.clone();
+
+let callback: AudioCallback = Box::new(move |output, input, frames, _, _| {
+    // Deinterleave to separate channel buffers
+    let input_buffers = deinterleave(input, 2, frames);
+
+    // Process each channel
+    let mut comp = comp_clone.lock().unwrap();
+    let output_buffers: Vec<Buffer<f64>> = input_buffers.iter()
+        .map(|buf| {
+            let out = Buffer::new(frames);
+            comp.run(buf, &out);
+            out
+        })
+        .collect();
+
+    // Interleave back to output
+    interleave(&output_buffers, output, frames);
+    0
+});
+```
+
 ## Thread Safety
 
 All buffer types implement `Send + Sync` and use interior mutability with `RwLock`:
@@ -345,6 +475,14 @@ Guards automatically release locks when dropped (RAII pattern).
 Supported bit depths: 8, 16, 24, 32-bit
 
 ## Changelog
+
+### 1.1.0
+- Added `realtime` feature with cross-platform audio streaming I/O
+- `Realtime` struct providing callback-based audio input/output
+- Platform backends: CoreAudio (macOS), WASAPI (Windows), ALSA (Linux)
+- Helper functions for buffer interleaving/deinterleaving
+- `stereo_callback` wrapper for simplified stereo processing
+- Seamless integration with thread-safe `Buffer` types
 
 ### 1.0.0
 - Major update with thread-safe buffers using `RwLock`

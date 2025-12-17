@@ -11,6 +11,7 @@
 //! - **DSP primitives** - Convolution, compression, limiting, and delay
 //! - **Audio file I/O** - WAV and AIFF format support with Buffer integration
 //! - **Plugin system** - MKAU format for modular processing chains
+//! - **Real-time streaming** - RTAudio-style API for audio I/O (optional `realtime` feature)
 //!
 //! ## Quick Start
 //!
@@ -45,6 +46,7 @@
 //! - [`dsp`] - Digital signal processing components
 //! - [`audiofile`] - WAV/AIFF file loading and saving
 //! - [`processor`] - MKAU plugin format and dynamic loading
+//! - [`realtime`] - Real-time audio streaming I/O (requires `realtime` feature)
 //!
 //! ## Thread Safety
 //!
@@ -137,3 +139,10 @@ pub mod processor;
 ///
 /// Supports 8/16/24/32-bit audio with normalized f64 sample representation.
 pub mod audiofile;
+
+/// Real-time audio streaming I/O inspired by RTAudio.
+///
+/// Provides cross-platform audio input/output with a callback-based API.
+/// Enable with the `realtime` feature flag.
+#[cfg(feature = "realtime")]
+pub mod realtime;
