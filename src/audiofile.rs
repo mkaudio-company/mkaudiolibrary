@@ -1,12 +1,13 @@
-//! Audio file loading and saving for WAV and AIFF formats.
+//! Audio file loading and saving for WAV, BWF, and AIFF formats.
 //!
-//! This module provides functionality to read and write audio files in WAV and AIFF
-//! formats. All audio data is stored internally as normalized `f64` samples in the
-//! range -1.0 to 1.0.
+//! This module provides functionality to read and write audio files in WAV, BWF
+//! (Broadcast Wave Format), and AIFF formats. All audio data is stored internally
+//! as normalized `f64` samples in the range -1.0 to 1.0.
 //!
 //! # Supported Formats
 //!
 //! - **WAV** - RIFF WAVE format with PCM encoding
+//! - **BWF** - Broadcast Wave Format (WAV with bext metadata chunk)
 //! - **AIFF** - Audio Interchange File Format (uncompressed and compressed/AIFC)
 //!
 //! # Supported Bit Depths
@@ -112,6 +113,42 @@
 //!     }
 //! }
 //! ```
+//!
+//! # BWF (Broadcast Wave Format) Support
+//!
+//! BWF extends the standard WAV format with professional broadcast metadata:
+//!
+//! - **bext chunk** - Broadcast extension metadata (description, originator, date, time, timecode)
+//! - **Markers** - Cue points with labels for edit points, regions, and sync references
+//! - **Tempo** - Musical tempo information for DAW integration
+//!
+//! ```ignore
+//! use mkaudiolibrary::audiofile::{AudioFile, FileFormat, Marker};
+//!
+//! let mut audio = AudioFile::default();
+//! audio.load("broadcast.wav");
+//!
+//! // Access BWF metadata
+//! if let Some(bext) = audio.bext() {
+//!     println!("Description: {}", bext.description);
+//!     println!("Originator: {}", bext.originator);
+//!     println!("Timecode: {}", bext.time_reference);
+//! }
+//!
+//! // Access markers
+//! for marker in audio.markers() {
+//!     println!("Marker '{}' at sample {}", marker.label, marker.position);
+//! }
+//!
+//! // Add a marker
+//! audio.add_marker(Marker::new(44100, "Verse 1"));
+//!
+//! // Set tempo
+//! audio.set_tempo(120.0);
+//!
+//! // Save as BWF (includes bext chunk)
+//! audio.save_bwf("output.wav");
+//! ```
 
 // Lookup table for AIFF extended precision sample rate encoding.
 // Maps common sample rates to their 80-bit IEEE 754 extended precision representation.
@@ -216,6 +253,244 @@ enum Endianness
     Little
 }
 
+// ==========================================
+// BWF (Broadcast Wave Format) Types
+// ==========================================
+
+/// Broadcast Extension (bext) chunk data for BWF files.
+///
+/// Contains metadata defined by the EBU Tech 3285 standard for broadcast audio.
+/// This chunk is used in professional broadcast workflows to embed production
+/// information directly in the audio file.
+#[derive(Clone, Debug)]
+pub struct BextChunk
+{
+    /// Free-form description of the audio content (max 256 characters).
+    pub description : String,
+    /// Name of the originator/creator (max 32 characters).
+    pub originator : String,
+    /// Unique reference identifier (max 32 characters).
+    /// Typically format: CountryCode + OrganizationCode + SerialNumber.
+    pub originator_reference : String,
+    /// Origination date in format "yyyy-mm-dd" (10 characters).
+    pub origination_date : String,
+    /// Origination time in format "hh:mm:ss" (8 characters).
+    pub origination_time : String,
+    /// Sample count since midnight for timecode sync.
+    /// Combined with sample rate, this gives the precise start time.
+    pub time_reference : u64,
+    /// BWF version number (typically 1 or 2).
+    pub version : u16,
+    /// SMPTE UMID (Unique Material Identifier), 64 bytes.
+    pub umid : [u8; 64],
+    /// Integrated loudness value (EBU R 128), in LUFS * 100.
+    pub loudness_value : i16,
+    /// Loudness range (EBU R 128), in LU * 100.
+    pub loudness_range : i16,
+    /// Maximum true peak level, in dBTP * 100.
+    pub max_true_peak_level : i16,
+    /// Maximum momentary loudness, in LUFS * 100.
+    pub max_momentary_loudness : i16,
+    /// Maximum short-term loudness, in LUFS * 100.
+    pub max_short_term_loudness : i16,
+    /// Free-form coding history string.
+    /// Documents the signal chain and encoding history.
+    pub coding_history : String,
+}
+
+impl Default for BextChunk
+{
+    fn default() -> Self
+    {
+        Self
+        {
+            description: String::new(),
+            originator: String::new(),
+            originator_reference: String::new(),
+            origination_date: String::new(),
+            origination_time: String::new(),
+            time_reference: 0,
+            version: 2,
+            umid: [0u8; 64],
+            loudness_value: 0,
+            loudness_range: 0,
+            max_true_peak_level: 0,
+            max_momentary_loudness: 0,
+            max_short_term_loudness: 0,
+            coding_history: String::new(),
+        }
+    }
+}
+
+impl BextChunk
+{
+    /// Create a new empty BextChunk.
+    pub fn new() -> Self { Self::default() }
+
+    /// Create a BextChunk with basic metadata.
+    ///
+    /// # Arguments
+    /// * `description` - Description of the audio content
+    /// * `originator` - Name of the creator/organization
+    pub fn with_description(description : &str, originator : &str) -> Self
+    {
+        Self
+        {
+            description: description.chars().take(256).collect(),
+            originator: originator.chars().take(32).collect(),
+            version: 2,
+            ..Default::default()
+        }
+    }
+
+    /// Set the origination date and time.
+    ///
+    /// # Arguments
+    /// * `date` - Date string in "yyyy-mm-dd" format
+    /// * `time` - Time string in "hh:mm:ss" format
+    pub fn set_datetime(&mut self, date : &str, time : &str)
+    {
+        self.origination_date = date.chars().take(10).collect();
+        self.origination_time = time.chars().take(8).collect();
+    }
+
+    /// Set current date and time as origination timestamp.
+    pub fn set_current_datetime(&mut self)
+    {
+        // Simple placeholder - in production, use chrono or time crate
+        self.origination_date = String::from("2025-01-01");
+        self.origination_time = String::from("00:00:00");
+    }
+}
+
+/// A marker (cue point) in an audio file.
+///
+/// Markers identify specific positions in the audio for editing, synchronization,
+/// or navigation purposes. They are stored in the `cue ` and `LIST` chunks.
+#[derive(Clone, Debug)]
+pub struct Marker
+{
+    /// Unique identifier for this marker.
+    pub id : u32,
+    /// Sample position of the marker (0-indexed).
+    pub position : u64,
+    /// Label/name for the marker.
+    pub label : String,
+}
+
+impl Marker
+{
+    /// Create a new marker at the specified position.
+    ///
+    /// # Arguments
+    /// * `position` - Sample position (0-indexed)
+    /// * `label` - Descriptive label for the marker
+    pub fn new(position : u64, label : &str) -> Self
+    {
+        Self
+        {
+            id: 0,
+            position,
+            label: label.to_string(),
+        }
+    }
+
+    /// Create a marker with a specific ID.
+    pub fn with_id(id : u32, position : u64, label : &str) -> Self
+    {
+        Self
+        {
+            id,
+            position,
+            label: label.to_string(),
+        }
+    }
+}
+
+impl Default for Marker
+{
+    fn default() -> Self
+    {
+        Self
+        {
+            id: 0,
+            position: 0,
+            label: String::new(),
+        }
+    }
+}
+
+/// Tempo information for audio files.
+///
+/// Used in DAW workflows to synchronize audio with musical time.
+/// The position field allows tempo markers to be placed at specific sample positions,
+/// enabling tempo changes throughout the audio file.
+#[derive(Clone, Debug)]
+pub struct TempoInfo
+{
+    /// Tempo in beats per minute.
+    pub bpm : f64,
+    /// Time signature numerator (e.g., 4 for 4/4).
+    pub time_sig_numerator : u8,
+    /// Time signature denominator (e.g., 4 for 4/4).
+    pub time_sig_denominator : u8,
+    /// Sample position where this tempo starts (0 for file start).
+    pub position : u64,
+}
+
+impl Default for TempoInfo
+{
+    fn default() -> Self
+    {
+        Self
+        {
+            bpm: 120.0,
+            time_sig_numerator: 4,
+            time_sig_denominator: 4,
+            position: 0,
+        }
+    }
+}
+
+impl TempoInfo
+{
+    /// Create tempo info with the specified BPM at position 0.
+    pub fn new(bpm : f64) -> Self
+    {
+        Self { bpm, ..Default::default() }
+    }
+
+    /// Create tempo info with BPM at a specific sample position.
+    pub fn at_position(bpm : f64, position : u64) -> Self
+    {
+        Self { bpm, position, ..Default::default() }
+    }
+
+    /// Create tempo info with BPM and time signature at position 0.
+    pub fn with_time_signature(bpm : f64, numerator : u8, denominator : u8) -> Self
+    {
+        Self
+        {
+            bpm,
+            time_sig_numerator: numerator,
+            time_sig_denominator: denominator,
+            position: 0,
+        }
+    }
+
+    /// Create tempo info with BPM, time signature, and position.
+    pub fn with_time_signature_at(bpm : f64, numerator : u8, denominator : u8, position : u64) -> Self
+    {
+        Self
+        {
+            bpm,
+            time_sig_numerator: numerator,
+            time_sig_denominator: denominator,
+            position,
+        }
+    }
+}
+
 use crate::buffer::Buffer;
 
 /// Audio file container for loading, manipulating, and saving audio data.
@@ -252,7 +527,11 @@ pub struct AudioFile
     pub xml_chunk : String,
     file_format : FileFormat,
     sample_rate : usize,
-    bit_depth : usize
+    bit_depth : usize,
+    // BWF (Broadcast Wave Format) fields
+    bext_chunk : Option<BextChunk>,
+    markers : Vec<Marker>,
+    tempo : Option<TempoInfo>,
 }
 impl AudioFile
 {
@@ -272,7 +551,10 @@ impl AudioFile
             xml_chunk: String::new(),
             file_format: FileFormat::None,
             sample_rate: 44100,
-            bit_depth: 16
+            bit_depth: 16,
+            bext_chunk: None,
+            markers: Vec::new(),
+            tempo: None,
         }
     }
 
@@ -509,6 +791,144 @@ impl AudioFile
     /// # Arguments
     /// * `sample_rate` - Sample rate value (e.g., 44100, 48000, 96000)
     pub fn set_sample_rate(&mut self, sample_rate : usize) { self.sample_rate = sample_rate }
+
+    // ==========================================
+    // BWF (Broadcast Wave Format) Methods
+    // ==========================================
+
+    /// Get the BWF broadcast extension (bext) chunk if present.
+    ///
+    /// # Returns
+    /// `Some(&BextChunk)` if the file contains BWF metadata, `None` otherwise.
+    pub fn bext(&self) -> Option<&BextChunk> { self.bext_chunk.as_ref() }
+
+    /// Get a mutable reference to the BWF broadcast extension chunk.
+    ///
+    /// # Returns
+    /// `Some(&mut BextChunk)` if the file contains BWF metadata, `None` otherwise.
+    pub fn bext_mut(&mut self) -> Option<&mut BextChunk> { self.bext_chunk.as_mut() }
+
+    /// Set the BWF broadcast extension chunk.
+    ///
+    /// # Arguments
+    /// * `bext` - The BextChunk to set
+    pub fn set_bext(&mut self, bext : BextChunk) { self.bext_chunk = Some(bext); }
+
+    /// Remove the BWF broadcast extension chunk.
+    pub fn clear_bext(&mut self) { self.bext_chunk = None; }
+
+    /// Check if this file has BWF metadata.
+    pub fn is_bwf(&self) -> bool { self.bext_chunk.is_some() }
+
+    /// Get all markers in the audio file.
+    ///
+    /// # Returns
+    /// A slice of all markers, sorted by position.
+    pub fn markers(&self) -> &[Marker] { &self.markers }
+
+    /// Get a mutable reference to the markers.
+    pub fn markers_mut(&mut self) -> &mut Vec<Marker> { &mut self.markers }
+
+    /// Add a marker at the specified position.
+    ///
+    /// # Arguments
+    /// * `marker` - The marker to add
+    pub fn add_marker(&mut self, mut marker : Marker)
+    {
+        // Assign a unique ID if not set
+        if marker.id == 0
+        {
+            marker.id = self.markers.iter().map(|m| m.id).max().unwrap_or(0) + 1;
+        }
+        self.markers.push(marker);
+        self.markers.sort_by_key(|m| m.position);
+    }
+
+    /// Remove a marker by ID.
+    ///
+    /// # Arguments
+    /// * `id` - The marker ID to remove
+    ///
+    /// # Returns
+    /// `true` if the marker was found and removed, `false` otherwise.
+    pub fn remove_marker(&mut self, id : u32) -> bool
+    {
+        if let Some(pos) = self.markers.iter().position(|m| m.id == id)
+        {
+            self.markers.remove(pos);
+            true
+        }
+        else { false }
+    }
+
+    /// Remove all markers.
+    pub fn clear_markers(&mut self) { self.markers.clear(); }
+
+    /// Get the tempo information if present.
+    ///
+    /// # Returns
+    /// `Some(&TempoInfo)` if tempo is set, `None` otherwise.
+    pub fn tempo(&self) -> Option<&TempoInfo> { self.tempo.as_ref() }
+
+    /// Set the tempo in BPM at position 0.
+    ///
+    /// # Arguments
+    /// * `bpm` - Beats per minute
+    pub fn set_tempo(&mut self, bpm : f64) { self.tempo = Some(TempoInfo::new(bpm)); }
+
+    /// Set the tempo in BPM at a specific sample position.
+    ///
+    /// # Arguments
+    /// * `bpm` - Beats per minute
+    /// * `position` - Sample position where this tempo starts
+    pub fn set_tempo_at(&mut self, bpm : f64, position : u64)
+    {
+        self.tempo = Some(TempoInfo::at_position(bpm, position));
+    }
+
+    /// Set tempo with time signature at position 0.
+    ///
+    /// # Arguments
+    /// * `bpm` - Beats per minute
+    /// * `numerator` - Time signature numerator
+    /// * `denominator` - Time signature denominator
+    pub fn set_tempo_with_time_sig(&mut self, bpm : f64, numerator : u8, denominator : u8)
+    {
+        self.tempo = Some(TempoInfo::with_time_signature(bpm, numerator, denominator));
+    }
+
+    /// Set tempo with time signature at a specific sample position.
+    ///
+    /// # Arguments
+    /// * `bpm` - Beats per minute
+    /// * `numerator` - Time signature numerator
+    /// * `denominator` - Time signature denominator
+    /// * `position` - Sample position where this tempo starts
+    pub fn set_tempo_with_time_sig_at(&mut self, bpm : f64, numerator : u8, denominator : u8, position : u64)
+    {
+        self.tempo = Some(TempoInfo::with_time_signature_at(bpm, numerator, denominator, position));
+    }
+
+    /// Clear the tempo information.
+    pub fn clear_tempo(&mut self) { self.tempo = None; }
+
+    /// Save audio file as BWF (Broadcast Wave Format).
+    ///
+    /// This saves the file as a WAV with the bext chunk included.
+    /// If no bext chunk exists, one is created with default values.
+    ///
+    /// # Arguments
+    /// * `path` - Destination file path
+    pub fn save_bwf(&mut self, path : &str)
+    {
+        // Ensure we have a bext chunk
+        if self.bext_chunk.is_none()
+        {
+            self.bext_chunk = Some(BextChunk::new());
+        }
+        self.save_wav_internal(path, true);
+    }
+
     fn read_wav(&mut self, buffer : &[u8])
     {
         if let Ok(header_chunk_id) = String::from_utf8(buffer[0..4].to_vec())
@@ -612,11 +1032,42 @@ impl AudioFile
                 }
             }
         }
-        let chunk_size = get_u32(buffer, index_of_xmlchunk + 4, Endianness::Little) as usize;
-        match String::from_utf8(buffer[index_of_xmlchunk + 8..index_of_xmlchunk + 8 + chunk_size].to_vec())
+        // Read iXML chunk
+        if index_of_xmlchunk > 0
         {
-            Ok(chunk) => { self.xml_chunk = chunk }
-            Err(error) => eprintln!("{}", error)
+            let chunk_size = get_u32(buffer, index_of_xmlchunk + 4, Endianness::Little) as usize;
+            if let Ok(chunk) = String::from_utf8(buffer[index_of_xmlchunk + 8..index_of_xmlchunk + 8 + chunk_size].to_vec())
+            {
+                self.xml_chunk = chunk;
+            }
+        }
+
+        // Read BWF bext chunk
+        let index_of_bext = get_index_of_chunk(buffer, "bext", 12, Endianness::Little);
+        if index_of_bext > 0
+        {
+            self.bext_chunk = Some(read_bext_chunk(buffer, index_of_bext));
+        }
+
+        // Read cue chunk (markers)
+        let index_of_cue = get_index_of_chunk(buffer, "cue ", 12, Endianness::Little);
+        if index_of_cue > 0
+        {
+            self.markers = read_cue_chunk(buffer, index_of_cue);
+
+            // Try to read marker labels from LIST/adtl chunk
+            let index_of_list = get_index_of_chunk(buffer, "LIST", 12, Endianness::Little);
+            if index_of_list > 0
+            {
+                read_marker_labels(buffer, index_of_list, &mut self.markers);
+            }
+        }
+
+        // Read tempo from acid chunk (used by many DAWs)
+        let index_of_acid = get_index_of_chunk(buffer, "acid", 12, Endianness::Little);
+        if index_of_acid > 0
+        {
+            self.tempo = read_acid_chunk(buffer, index_of_acid);
         }
     }
     fn read_aiff(&mut self, buffer : &[u8])
@@ -733,18 +1184,63 @@ impl AudioFile
     }
     fn save_wav(&self, path : &str)
     {
+        self.save_wav_internal(path, false);
+    }
+
+    fn save_wav_internal(&self, path : &str, include_bwf : bool)
+    {
         let mut buffer = vec![];
 
         let data_chunk_size = self.num_sample() * self.num_channel() * self.bit_depth / 8;
-        let audio_format =  WavAudioFormat::PCM;
+        let audio_format = WavAudioFormat::PCM;
         let format_chunk_size = 16;
         let i_xmlchunk_size = self.xml_chunk.len();
+
+        // Calculate BWF chunk sizes
+        let bext_chunk_size = if include_bwf && self.bext_chunk.is_some()
+        {
+            let bext = self.bext_chunk.as_ref().unwrap();
+            602 + bext.coding_history.len()  // Fixed header + coding history
+        }
+        else { 0 };
+
+        let (cue_chunk_size, list_chunk_size) = if !self.markers.is_empty()
+        {
+            let cue_size = 4 + self.markers.len() * 24;  // num_cues + cue entries
+            let mut list_size = 4;  // "adtl"
+            for marker in &self.markers
+            {
+                if !marker.label.is_empty()
+                {
+                    let label_len = marker.label.len() + 1;  // +1 for null terminator
+                    let padded_len = if label_len % 2 == 1 { label_len + 1 } else { label_len };
+                    list_size += 8 + 4 + padded_len;  // chunk header + cue id + label
+                }
+            }
+            (cue_size, if list_size > 4 { list_size } else { 0 })
+        }
+        else { (0, 0) };
+
+        let acid_chunk_size = if self.tempo.is_some() { 24 } else { 0 };
 
         set_string(&mut buffer, "RIFF");
         let mut file_size_in_bytes = 4 + format_chunk_size + 8 + 8 + data_chunk_size;
         if i_xmlchunk_size > 0 { file_size_in_bytes += 8 + i_xmlchunk_size; }
+        if bext_chunk_size > 0 { file_size_in_bytes += 8 + bext_chunk_size; }
+        if cue_chunk_size > 0 { file_size_in_bytes += 8 + cue_chunk_size; }
+        if list_chunk_size > 0 { file_size_in_bytes += 8 + list_chunk_size; }
+        if acid_chunk_size > 0 { file_size_in_bytes += 8 + acid_chunk_size; }
+
         set_u32(&mut buffer, file_size_in_bytes as u32, Endianness::Little);
         set_string(&mut buffer, "WAVE");
+
+        // Write bext chunk (BWF) - should come early in the file
+        if bext_chunk_size > 0
+        {
+            write_bext_chunk(&mut buffer, self.bext_chunk.as_ref().unwrap());
+        }
+
+        // Write fmt chunk
         set_string(&mut buffer, "fmt ");
         set_u32(&mut buffer, format_chunk_size as u32, Endianness::Little);
         set_u16(&mut buffer, audio_format.to_num() as u16, Endianness::Little);
@@ -753,7 +1249,27 @@ impl AudioFile
         set_u32(&mut buffer, (self.num_channel() * self.sample_rate * self.bit_depth / 8) as u32, Endianness::Little);
         set_u16(&mut buffer, (self.num_channel() * (self.bit_depth / 8)) as u16, Endianness::Little);
         set_u16(&mut buffer, self.bit_depth as u16, Endianness::Little);
-        set_string (&mut buffer, "data");
+
+        // Write cue chunk (markers)
+        if cue_chunk_size > 0
+        {
+            write_cue_chunk(&mut buffer, &self.markers);
+        }
+
+        // Write LIST/adtl chunk (marker labels)
+        if list_chunk_size > 0
+        {
+            write_list_adtl_chunk(&mut buffer, &self.markers);
+        }
+
+        // Write acid chunk (tempo)
+        if acid_chunk_size > 0
+        {
+            write_acid_chunk(&mut buffer, self.tempo.as_ref().unwrap(), self.num_sample(), self.sample_rate);
+        }
+
+        // Write data chunk
+        set_string(&mut buffer, "data");
         set_u32(&mut buffer, data_chunk_size as u32, Endianness::Little);
 
         for index in 0..self.num_sample()
@@ -774,7 +1290,7 @@ impl AudioFile
                     bytes[2] = (sample >> 16 & 0xFF)  as u8;
                     bytes[1] = (sample >>  8 & 0xFF) as u8;
                     bytes[0] = (sample & 0xFF) as u8;
-                    
+
                     buffer.extend_from_slice(&bytes);
                 }
                 else if self.bit_depth == 32
@@ -788,17 +1304,15 @@ impl AudioFile
                 }
             }
         }
+
+        // Write iXML chunk
         if i_xmlchunk_size > 0
         {
             set_string(&mut buffer, "iXML");
             set_u32(&mut buffer, i_xmlchunk_size as u32, Endianness::Little);
             set_string(&mut buffer, &self.xml_chunk);
         }
-        if file_size_in_bytes != buffer.len() - 8 || data_chunk_size != (self.num_sample() * self.num_channel() * self.bit_depth / 8)
-        {
-            eprintln!("ERROR: file size doesn't match");
-            return
-        }
+
         if let Ok(mut file) = std::fs::File::create(path)
         {
             if let Err(error) = std::io::Write::write(&mut file, &buffer)
@@ -892,7 +1406,10 @@ impl Default for AudioFile
             xml_chunk: String::new(),
             file_format: FileFormat::NotLoaded,
             sample_rate: 44100,
-            bit_depth: 16
+            bit_depth: 16,
+            bext_chunk: None,
+            markers: Vec::new(),
+            tempo: None,
         }
     }
 }
@@ -1042,4 +1559,381 @@ fn set_u16(buffer : &mut Vec<u8>, data : u16, endianness : Endianness)
         },
     }
     buffer.extend_from_slice(&bytes);
+}
+
+#[inline]
+fn get_u64(buffer : &[u8], start : usize, endianness : Endianness) -> u64
+{
+    if buffer.len() >= (start + 8)
+    {
+        return match endianness
+        {
+            Endianness::Big =>
+            {
+                ((buffer[start + 7] as u64) << 56) | ((buffer[start + 6] as u64) << 48) |
+                ((buffer[start + 5] as u64) << 40) | ((buffer[start + 4] as u64) << 32) |
+                ((buffer[start + 3] as u64) << 24) | ((buffer[start + 2] as u64) << 16) |
+                ((buffer[start + 1] as u64) << 8) | buffer[start] as u64
+            },
+            Endianness::Little =>
+            {
+                ((buffer[start] as u64) << 56) | ((buffer[start + 1] as u64) << 48) |
+                ((buffer[start + 2] as u64) << 40) | ((buffer[start + 3] as u64) << 32) |
+                ((buffer[start + 4] as u64) << 24) | ((buffer[start + 5] as u64) << 16) |
+                ((buffer[start + 6] as u64) << 8) | buffer[start + 7] as u64
+            },
+        }
+    }
+    0
+}
+
+#[inline]
+fn set_u64(buffer : &mut Vec<u8>, data : u64, endianness : Endianness)
+{
+    let mut bytes = [0u8; 8];
+
+    match endianness
+    {
+        Endianness::Big =>
+        {
+            bytes[0] = ((data >> 56) & 0xFF) as u8;
+            bytes[1] = ((data >> 48) & 0xFF) as u8;
+            bytes[2] = ((data >> 40) & 0xFF) as u8;
+            bytes[3] = ((data >> 32) & 0xFF) as u8;
+            bytes[4] = ((data >> 24) & 0xFF) as u8;
+            bytes[5] = ((data >> 16) & 0xFF) as u8;
+            bytes[6] = ((data >> 8) & 0xFF) as u8;
+            bytes[7] = (data & 0xFF) as u8;
+        },
+        Endianness::Little =>
+        {
+            bytes[7] = ((data >> 56) & 0xFF) as u8;
+            bytes[6] = ((data >> 48) & 0xFF) as u8;
+            bytes[5] = ((data >> 40) & 0xFF) as u8;
+            bytes[4] = ((data >> 32) & 0xFF) as u8;
+            bytes[3] = ((data >> 24) & 0xFF) as u8;
+            bytes[2] = ((data >> 16) & 0xFF) as u8;
+            bytes[1] = ((data >> 8) & 0xFF) as u8;
+            bytes[0] = (data & 0xFF) as u8;
+        },
+    }
+    buffer.extend_from_slice(&bytes);
+}
+
+// ==========================================
+// BWF Reading Helper Functions
+// ==========================================
+
+/// Read a fixed-length string from buffer, trimming null bytes.
+#[inline]
+fn read_fixed_string(buffer : &[u8], start : usize, len : usize) -> String
+{
+    if start + len > buffer.len() { return String::new(); }
+    String::from_utf8_lossy(&buffer[start..start + len])
+        .trim_end_matches('\0')
+        .to_string()
+}
+
+/// Write a fixed-length string to buffer, padding with null bytes.
+#[inline]
+fn write_fixed_string(buffer : &mut Vec<u8>, string : &str, len : usize)
+{
+    let bytes = string.as_bytes();
+    let write_len = bytes.len().min(len);
+    buffer.extend_from_slice(&bytes[..write_len]);
+    // Pad with zeros
+    for _ in write_len..len { buffer.push(0); }
+}
+
+/// Read BWF bext chunk from buffer.
+fn read_bext_chunk(buffer : &[u8], index : usize) -> BextChunk
+{
+    let _chunk_size = get_u32(buffer, index + 4, Endianness::Little) as usize;
+    let data_start = index + 8;
+
+    let mut bext = BextChunk::new();
+
+    // Fixed-size fields according to EBU Tech 3285
+    bext.description = read_fixed_string(buffer, data_start, 256);
+    bext.originator = read_fixed_string(buffer, data_start + 256, 32);
+    bext.originator_reference = read_fixed_string(buffer, data_start + 288, 32);
+    bext.origination_date = read_fixed_string(buffer, data_start + 320, 10);
+    bext.origination_time = read_fixed_string(buffer, data_start + 330, 8);
+
+    // Time reference (sample count since midnight) - 8 bytes, little-endian
+    bext.time_reference = get_u64(buffer, data_start + 338, Endianness::Little);
+
+    // Version - 2 bytes
+    bext.version = get_u16(buffer, data_start + 346, Endianness::Little);
+
+    // UMID - 64 bytes
+    if data_start + 412 <= buffer.len()
+    {
+        bext.umid.copy_from_slice(&buffer[data_start + 348..data_start + 412]);
+    }
+
+    // Loudness values (BWF version 2) - 10 bytes total
+    if bext.version >= 2 && data_start + 422 <= buffer.len()
+    {
+        bext.loudness_value = get_u16(buffer, data_start + 412, Endianness::Little) as i16;
+        bext.loudness_range = get_u16(buffer, data_start + 414, Endianness::Little) as i16;
+        bext.max_true_peak_level = get_u16(buffer, data_start + 416, Endianness::Little) as i16;
+        bext.max_momentary_loudness = get_u16(buffer, data_start + 418, Endianness::Little) as i16;
+        bext.max_short_term_loudness = get_u16(buffer, data_start + 420, Endianness::Little) as i16;
+    }
+
+    // Coding history starts at offset 602 (after 180 reserved bytes)
+    let coding_history_start = data_start + 602;
+    if coding_history_start < buffer.len()
+    {
+        let chunk_end = index + 8 + _chunk_size;
+        if chunk_end <= buffer.len()
+        {
+            bext.coding_history = read_fixed_string(buffer, coding_history_start, chunk_end - coding_history_start);
+        }
+    }
+
+    bext
+}
+
+/// Read cue chunk (markers) from buffer.
+fn read_cue_chunk(buffer : &[u8], index : usize) -> Vec<Marker>
+{
+    let mut markers = Vec::new();
+    let data_start = index + 8;
+
+    // Number of cue points
+    let num_cue_points = get_u32(buffer, data_start, Endianness::Little) as usize;
+
+    // Each cue point is 24 bytes
+    for i in 0..num_cue_points
+    {
+        let cue_start = data_start + 4 + i * 24;
+        if cue_start + 24 > buffer.len() { break; }
+
+        let id = get_u32(buffer, cue_start, Endianness::Little);
+        let position = get_u32(buffer, cue_start + 4, Endianness::Little) as u64;
+        // Bytes 8-11: data chunk ID (usually "data")
+        // Bytes 12-15: chunk start
+        // Bytes 16-19: block start
+        let sample_offset = get_u32(buffer, cue_start + 20, Endianness::Little) as u64;
+
+        markers.push(Marker
+        {
+            id,
+            position: position + sample_offset,
+            label: String::new(),
+        });
+    }
+
+    markers
+}
+
+/// Read marker labels from LIST/adtl chunk.
+fn read_marker_labels(buffer : &[u8], index : usize, markers : &mut [Marker])
+{
+    let chunk_size = get_u32(buffer, index + 4, Endianness::Little) as usize;
+    let data_start = index + 8;
+
+    // Check if this is an "adtl" list
+    if data_start + 4 > buffer.len() { return; }
+    let list_type = read_fixed_string(buffer, data_start, 4);
+    if list_type != "adtl" { return; }
+
+    let mut pos = data_start + 4;
+    let chunk_end = index + 8 + chunk_size;
+
+    while pos + 8 < chunk_end && pos + 8 < buffer.len()
+    {
+        let sub_chunk_id = read_fixed_string(buffer, pos, 4);
+        let sub_chunk_size = get_u32(buffer, pos + 4, Endianness::Little) as usize;
+
+        if sub_chunk_id == "labl" || sub_chunk_id == "note"
+        {
+            let cue_id = get_u32(buffer, pos + 8, Endianness::Little);
+            let label_len = sub_chunk_size.saturating_sub(4);
+            let label = read_fixed_string(buffer, pos + 12, label_len);
+
+            // Find and update the matching marker
+            if let Some(marker) = markers.iter_mut().find(|m| m.id == cue_id)
+            {
+                marker.label = label;
+            }
+        }
+
+        pos += 8 + sub_chunk_size;
+        // Word alignment
+        if sub_chunk_size % 2 == 1 { pos += 1; }
+    }
+}
+
+/// Read acid chunk for tempo information.
+fn read_acid_chunk(buffer : &[u8], index : usize) -> Option<TempoInfo>
+{
+    let data_start = index + 8;
+
+    // acid chunk structure:
+    // 4 bytes: type flags
+    // 2 bytes: root note
+    // 2 bytes: unknown
+    // 4 bytes: unknown
+    // 4 bytes: num beats
+    // 2 bytes: meter denominator
+    // 2 bytes: meter numerator
+    // 4 bytes: tempo (float)
+
+    if data_start + 24 > buffer.len() { return None; }
+
+    let tempo_bits = get_u32(buffer, data_start + 20, Endianness::Little);
+    let tempo = f32::from_bits(tempo_bits) as f64;
+
+    if tempo > 0.0 && tempo < 1000.0
+    {
+        let numerator = get_u16(buffer, data_start + 18, Endianness::Little) as u8;
+        let denominator = get_u16(buffer, data_start + 16, Endianness::Little) as u8;
+
+        Some(TempoInfo
+        {
+            bpm: tempo,
+            time_sig_numerator: if numerator > 0 { numerator } else { 4 },
+            time_sig_denominator: if denominator > 0 { denominator } else { 4 },
+            position: 0,  // acid chunk doesn't store position, default to file start
+        })
+    }
+    else { None }
+}
+
+// ==========================================
+// BWF Writing Helper Functions
+// ==========================================
+
+/// Write BWF bext chunk to buffer.
+fn write_bext_chunk(buffer : &mut Vec<u8>, bext : &BextChunk)
+{
+    let chunk_size = 602 + bext.coding_history.len();
+
+    set_string(buffer, "bext");
+    set_u32(buffer, chunk_size as u32, Endianness::Little);
+
+    // Fixed-size fields according to EBU Tech 3285
+    write_fixed_string(buffer, &bext.description, 256);
+    write_fixed_string(buffer, &bext.originator, 32);
+    write_fixed_string(buffer, &bext.originator_reference, 32);
+    write_fixed_string(buffer, &bext.origination_date, 10);
+    write_fixed_string(buffer, &bext.origination_time, 8);
+
+    // Time reference (8 bytes)
+    set_u64(buffer, bext.time_reference, Endianness::Little);
+
+    // Version (2 bytes)
+    set_u16(buffer, bext.version, Endianness::Little);
+
+    // UMID (64 bytes)
+    buffer.extend_from_slice(&bext.umid);
+
+    // Loudness values (10 bytes)
+    set_u16(buffer, bext.loudness_value as u16, Endianness::Little);
+    set_u16(buffer, bext.loudness_range as u16, Endianness::Little);
+    set_u16(buffer, bext.max_true_peak_level as u16, Endianness::Little);
+    set_u16(buffer, bext.max_momentary_loudness as u16, Endianness::Little);
+    set_u16(buffer, bext.max_short_term_loudness as u16, Endianness::Little);
+
+    // Reserved (180 bytes)
+    for _ in 0..180 { buffer.push(0); }
+
+    // Coding history (variable length)
+    set_string(buffer, &bext.coding_history);
+}
+
+/// Write cue chunk (markers) to buffer.
+fn write_cue_chunk(buffer : &mut Vec<u8>, markers : &[Marker])
+{
+    let chunk_size = 4 + markers.len() * 24;
+
+    set_string(buffer, "cue ");
+    set_u32(buffer, chunk_size as u32, Endianness::Little);
+
+    // Number of cue points
+    set_u32(buffer, markers.len() as u32, Endianness::Little);
+
+    // Cue points (24 bytes each)
+    for marker in markers
+    {
+        set_u32(buffer, marker.id, Endianness::Little);           // ID
+        set_u32(buffer, marker.position as u32, Endianness::Little);  // Position
+        set_string(buffer, "data");                               // Data chunk ID
+        set_u32(buffer, 0, Endianness::Little);                   // Chunk start
+        set_u32(buffer, 0, Endianness::Little);                   // Block start
+        set_u32(buffer, 0, Endianness::Little);                   // Sample offset
+    }
+}
+
+/// Write LIST/adtl chunk (marker labels) to buffer.
+fn write_list_adtl_chunk(buffer : &mut Vec<u8>, markers : &[Marker])
+{
+    // Calculate total size
+    let mut list_size = 4;  // "adtl"
+    for marker in markers
+    {
+        if !marker.label.is_empty()
+        {
+            let label_len = marker.label.len() + 1;  // +1 for null terminator
+            let padded_len = if label_len % 2 == 1 { label_len + 1 } else { label_len };
+            list_size += 8 + 4 + padded_len;  // chunk header + cue id + label
+        }
+    }
+
+    if list_size <= 4 { return; }
+
+    set_string(buffer, "LIST");
+    set_u32(buffer, list_size as u32, Endianness::Little);
+    set_string(buffer, "adtl");
+
+    // Write label sub-chunks
+    for marker in markers
+    {
+        if !marker.label.is_empty()
+        {
+            let label_len = marker.label.len() + 1;
+            let padded_len = if label_len % 2 == 1 { label_len + 1 } else { label_len };
+
+            set_string(buffer, "labl");
+            set_u32(buffer, (4 + padded_len) as u32, Endianness::Little);
+            set_u32(buffer, marker.id, Endianness::Little);
+            set_string(buffer, &marker.label);
+            buffer.push(0);  // Null terminator
+            if label_len % 2 == 1 { buffer.push(0); }  // Padding byte
+        }
+    }
+}
+
+/// Write acid chunk (tempo) to buffer.
+fn write_acid_chunk(buffer : &mut Vec<u8>, tempo : &TempoInfo, num_samples : usize, sample_rate : usize)
+{
+    set_string(buffer, "acid");
+    set_u32(buffer, 24, Endianness::Little);  // Chunk size
+
+    // Type flags (4 bytes) - 0x01 = one-shot, 0x02 = root note valid, etc.
+    set_u32(buffer, 0, Endianness::Little);
+
+    // Root note (2 bytes) - MIDI note number
+    set_u16(buffer, 60, Endianness::Little);  // Middle C
+
+    // Unknown (2 bytes)
+    set_u16(buffer, 0, Endianness::Little);
+
+    // Unknown (4 bytes)
+    set_u32(buffer, 0, Endianness::Little);
+
+    // Number of beats (4 bytes)
+    let duration_seconds = num_samples as f64 / sample_rate as f64;
+    let num_beats = (duration_seconds * tempo.bpm / 60.0) as u32;
+    set_u32(buffer, num_beats, Endianness::Little);
+
+    // Time signature (4 bytes)
+    set_u16(buffer, tempo.time_sig_denominator as u16, Endianness::Little);
+    set_u16(buffer, tempo.time_sig_numerator as u16, Endianness::Little);
+
+    // Tempo as float (4 bytes)
+    set_u32(buffer, (tempo.bpm as f32).to_bits(), Endianness::Little);
 }

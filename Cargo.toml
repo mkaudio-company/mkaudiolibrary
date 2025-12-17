@@ -2,7 +2,7 @@
 name = "mkaudiolibrary"
 description = "Modular audio processing library including MKAU plugin format based on Rust."
 license = "GPL-3.0"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 documentation = "https://docs.rs/mkaudiolibrary"
 readme = "README.md"

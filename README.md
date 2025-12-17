@@ -277,6 +277,48 @@ let buffers = audio.to_buffers();
 audio.from_buffers(&buffers);
 ```
 
+#### BWF (Broadcast Wave Format)
+
+Support for professional broadcast metadata, markers, and tempo information:
+
+```rust
+use mkaudiolibrary::audiofile::{AudioFile, BextChunk, Marker};
+
+let mut audio = AudioFile::default();
+audio.load("broadcast.wav");
+
+// Access BWF metadata
+if let Some(bext) = audio.bext() {
+    println!("Description: {}", bext.description);
+    println!("Originator: {}", bext.originator);
+    println!("Timecode: {} samples", bext.time_reference);
+}
+
+// Work with markers
+for marker in audio.markers() {
+    println!("Marker '{}' at sample {}", marker.label, marker.position);
+}
+
+// Add markers
+audio.add_marker(Marker::new(44100, "Verse 1"));
+audio.add_marker(Marker::new(88200, "Chorus"));
+
+// Set tempo for DAW integration
+audio.set_tempo(120.0);
+audio.set_tempo_with_time_sig(120.0, 4, 4);
+
+// Set tempo at a specific sample position
+audio.set_tempo_at(140.0, 44100 * 30);  // 140 BPM starting at 30 seconds
+
+// Set BWF metadata
+let mut bext = BextChunk::with_description("Recording session", "Studio A");
+bext.set_datetime("2025-01-15", "14:30:00");
+audio.set_bext(bext);
+
+// Save as BWF (includes bext chunk)
+audio.save_bwf("output_bwf.wav");
+```
+
 ### processor
 
 MKAU plugin format for modular audio processing chains:
@@ -470,11 +512,17 @@ Guards automatically release locks when dropped (RAII pattern).
 | Format | Extension | Read | Write | Notes |
 |--------|-----------|------|-------|-------|
 | WAV | `.wav` | Yes | Yes | PCM, IEEE Float |
+| BWF | `.wav` | Yes | Yes | WAV with bext chunk, markers, tempo |
 | AIFF | `.aiff`, `.aif` | Yes | Yes | Uncompressed, AIFC |
 
 Supported bit depths: 8, 16, 24, 32-bit
 
 ## Changelog
+
+### 1.2.0
+- BWF (Broadcast Wave Format) support with `bext` chunk for broadcast metadata
+- Markers/cue points with labels via `cue` and `LIST` chunks
+- Tempo information via `acid` chunk for DAW integration
 
 ### 1.1.0
 - Added `realtime` feature with cross-platform audio streaming I/O
