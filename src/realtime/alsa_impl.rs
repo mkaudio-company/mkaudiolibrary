@@ -132,6 +132,15 @@ fn open_configured(
     Ok((pcm, actual_frames))
 }
 
+/// Scalar stream configuration passed into [`audio_thread`], bundled into
+/// one struct to keep that function's argument count reasonable.
+struct AudioThreadConfig {
+    playback_channels: usize,
+    capture_channels: usize,
+    period_frames: usize,
+    sample_rate: usize,
+}
+
 /// Runs the blocking read/write loop, then hands the PCM handles back to
 /// the owning `AlsaBackend` over `return_tx` once it exits.
 ///
@@ -141,15 +150,19 @@ fn open_configured(
 fn audio_thread(
     playback: Option<PCM>,
     capture: Option<PCM>,
-    playback_channels: usize,
-    capture_channels: usize,
-    period_frames: usize,
-    sample_rate: usize,
+    config: AudioThreadConfig,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
     stream_time_bits: Arc<AtomicU64>,
     return_tx: std::sync::mpsc::Sender<(Option<PCM>, Option<PCM>)>,
 ) {
+    let AudioThreadConfig {
+        playback_channels,
+        capture_channels,
+        period_frames,
+        sample_rate,
+    } = config;
+
     if let Some(c) = &capture {
         let _ = c.start();
     }
@@ -161,13 +174,13 @@ fn audio_thread(
     let mut output_buf = vec![0.0f64; period_frames * playback_channels];
 
     while running.load(Ordering::SeqCst) {
-        if let (Some(io), Some(pcm)) = (&capture_io, &capture) {
-            if let Err(e) = io.readi(&mut input_buf) {
-                if pcm.try_recover(e, true).is_err() {
-                    break;
-                }
-                continue;
+        if let (Some(io), Some(pcm)) = (&capture_io, &capture)
+            && let Err(e) = io.readi(&mut input_buf)
+        {
+            if pcm.try_recover(e, true).is_err() {
+                break;
             }
+            continue;
         }
 
         let stream_time = f64::from_bits(stream_time_bits.load(Ordering::Relaxed));
@@ -400,14 +413,18 @@ impl Backend for AlsaBackend {
         let (return_tx, return_rx) = std::sync::mpsc::channel();
         self.return_rx = Some(return_rx);
 
+        let config = AudioThreadConfig {
+            playback_channels,
+            capture_channels,
+            period_frames,
+            sample_rate,
+        };
+
         self.thread_handle = Some(std::thread::spawn(move || {
             audio_thread(
                 playback,
                 capture,
-                playback_channels,
-                capture_channels,
-                period_frames,
-                sample_rate,
+                config,
                 callback,
                 running,
                 stream_time_bits,
