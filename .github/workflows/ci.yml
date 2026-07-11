@@ -33,7 +33,12 @@ jobs:
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        # libxcb1-dev etc.: `midi` pulls in mkmidilibrary, which depends on
+        # mkgraphic unconditionally (not just behind our own `gui` feature),
+        # and mkgraphic links against xcb on Linux.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: Check formatting
         run: cargo fmt --check
@@ -69,7 +74,9 @@ jobs:
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxcb1-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: Build with gui feature
         run: cargo build --features gui
