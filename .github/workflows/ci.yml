@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # au (AUv2 hosting) is macOS-only; gui pulls mkgraphic, verified
+          # here on macOS only (its Windows/Linux windowing support isn't
+          # established, so it's left out of the blocking matrix below -
+          # see the separate non-blocking probe step for Linux/Windows).
+          - os: macos-latest
+            features: realtime,simd,vst3,au,midi,gui
+          - os: windows-latest
+            features: realtime,simd,vst3,midi
+          - os: ubuntu-latest
+            features: realtime,simd,vst3,midi
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Build
+        run: cargo build --features "${{ matrix.features }}"
+
+      - name: Run clippy
+        run: cargo clippy --features "${{ matrix.features }}" -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --features "${{ matrix.features }}"
+
+      - name: Build examples
+        run: cargo build --examples --features "${{ matrix.features }}"
+
+  # Non-blocking probe: mkgraphic's Windows/Linux windowing support isn't
+  # confirmed, so `gui` isn't in the blocking matrix above for those OSes.
+  # This surfaces a build failure without turning the required checks red.
+  gui-feature-probe:
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxcb1-dev
+
+      - name: Build with gui feature
+        run: cargo build --features gui

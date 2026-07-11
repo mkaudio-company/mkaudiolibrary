@@ -1,8 +1,8 @@
 [package]
 name = "mkaudiolibrary"
 description = "Modular audio processing library including MKAU plugin format based on Rust."
-license = "GPL-3.0"
-version = "1.4.1"
+license = "MIT"
+version = "2.0.0"
 edition = "2024"
 documentation = "https://docs.rs/mkaudiolibrary"
 readme = "README.md"
@@ -15,22 +15,39 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
-realtime = []
+realtime = ["dep:coreaudio-sys", "dep:windows", "dep:alsa"]
+simd = []
 midi = ["mkmidilibrary"]
 gui = ["mkgraphic"]
+vst3 = ["dep:coreaudio-sys"]
+au = ["dep:coreaudio-sys"]
 
 [dependencies]
-libloading = "0.8.3"
-no_denormals = "0.1.2"
-mkmidilibrary = { version = "0.1.2", optional = true }
-mkgraphic = { version = "0.1.2", optional = true }
+libloading = "0.9"
+no_denormals = "0.3"
+mkmidilibrary = { version = "0.2", optional = true }
+mkgraphic = { version = "0.4", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = { version = "0.10", optional = true }
-coreaudio-sys = { version = "0.2", optional = true }
+coreaudio-sys = { version = "0.2.18", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_System_Threading"], optional = true }
+windows = { version = "0.62", features = [
+    "Win32_Media_Audio",
+    "Win32_Media_Multimedia",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+    "Win32_Devices_Properties",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Security",
+], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Pinned to match the `alsa` version mkmidilibrary (an optional dependency
+# via the `midi` feature) requires; alsa-sys uses a native `links` key, so
+# only one version can appear in the whole dependency graph at once.
 alsa = { version = "0.9", optional = true }

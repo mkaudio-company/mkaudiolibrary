@@ -11,10 +11,13 @@ A Rust library for real-time audio signal processing, featuring analog modeling 
 - **Thread-safe buffers** with `RwLock`-based concurrent access
 - **Analog modeling** for tube/tape-style saturation with asymmetric parameters
 - **Circuit simulation** with real-time transient analysis using MNA
-- **DSP primitives** including convolution, compression, limiting, and delay
-- **Audio file I/O** for WAV and AIFF formats with Buffer integration
-- **Plugin system** via MKAU format for modular processing chains
-- **Real-time streaming** via RTAudio-style API (optional `realtime` feature)
+- **DSP primitives** including convolution, compression, limiting, and delay, with pre-allocated scratch buffers so steady-state processing never allocates
+- **SIMD acceleration** (optional `simd` feature) for hot per-sample loops: AVX2+FMA/SSE2 on `x86_64`, NEON on `aarch64`, scalar fallback otherwise
+- **Time-frequency analysis** (`tf` module) - DFT, FFT (radix-2 + Bluestein for arbitrary lengths), DCT, STFT/multi-resolution STFT, CWT, CQT, and mel spectrograms
+- **Audio file I/O** for WAV, BWF, and AIFF formats with Buffer integration
+- **Plugin hosting** (`host` module) for MKAP (native), VST3, and AUv2 (macOS) - load and run third-party plugins through one `HostedPlugin` trait
+- **MKAP plugin system** for building your own modular processing chains
+- **Real-time streaming** via an RTAudio-style API (optional `realtime` feature) with real hardware-clocked backends: CoreAudio (macOS), WASAPI (Windows), ALSA (Linux)
 - **Zero-copy design** with boxed slices for minimal allocation overhead
 
 ## Installation
@@ -23,28 +26,49 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mkaudiolibrary = "1.4.1"
+mkaudiolibrary = "2.0.0"
 ```
 
-For real-time audio streaming, enable the `realtime` feature:
+For real-time audio streaming (real CoreAudio/WASAPI/ALSA backends), enable the `realtime` feature:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.4.1", features = ["realtime"] }
+mkaudiolibrary = { version = "2.0.0", features = ["realtime"] }
+```
+
+For SIMD-accelerated DSP hot paths:
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "2.0.0", features = ["simd"] }
+```
+
+For hosting third-party VST3 plugins:
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "2.0.0", features = ["vst3"] }
+```
+
+For hosting Audio Units (macOS only):
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "2.0.0", features = ["au"] }
 ```
 
 For MIDI support with mkmidilibrary integration:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.4.1", features = ["midi"] }
+mkaudiolibrary = { version = "2.0.0", features = ["midi"] }
 ```
 
 For GUI support with mkgraphic integration:
 
 ```toml
 [dependencies]
-mkaudiolibrary = { version = "1.4.1", features = ["gui"] }
+mkaudiolibrary = { version = "2.0.0", features = ["gui"] }
 ```
 
 ## Quick Start
@@ -419,9 +443,61 @@ for msg in midi.output.iter().flatten() {
 }
 ```
 
+### host (Plugin Hosting)
+
+Load and run third-party plugins - MKAP (always available), VST3 (`vst3` feature), and AUv2 (`au` feature, macOS only) - through one `HostedPlugin` trait:
+
+```rust
+use mkaudiolibrary::host::{scan_vst3, load};
+use mkaudiolibrary::processor::AudioIO;
+use std::path::Path;
+
+// Scan a directory for VST3 plugins
+let found = scan_vst3(Path::new("/Library/Audio/Plug-Ins/VST3"));
+for d in &found {
+    println!("[{}] {} - {}", d.format, d.vendor, d.name);
+}
+
+// Load and run one
+let mut plugin = load(&found[0]).expect("failed to load");
+plugin.prepare(48000, 512).expect("prepare failed");
+plugin.set_active(true).expect("activate failed");
+
+println!("{} in / {} out, {} parameters", plugin.num_inputs(), plugin.num_outputs(), plugin.num_parameters());
+for i in 0..plugin.num_parameters() {
+    println!("  [{}] {} = {:.3}", i, plugin.parameter_name(i), plugin.get_parameter(i));
+}
+
+let mut audio = AudioIO::new(plugin.num_inputs(), plugin.num_outputs(), 0, 0, 512);
+plugin.process(&mut audio);
+```
+
+The VST3 backend talks directly to a plugin's `IComponent`/`IAudioProcessor`/`IEditController` COM-style interfaces using hand-written vtables matching Steinberg's public ABI - no vendored SDK or C++ toolchain required. The AUv2 backend uses the system's AudioComponent registry via CoreAudio/AudioToolbox, negotiating 64-bit float with a 32-bit float fallback for plugins that don't support 64-bit processing.
+
+### tf (Time-Frequency Analysis)
+
+DFT, FFT, DCT, STFT/multi-resolution STFT, CWT, CQT, and mel spectrograms. Hot inner loops go through the same SIMD dot-product primitives as `dsp`.
+
+```rust
+use mkaudiolibrary::tf::{fft, stft, mel};
+
+// FFT of a real signal (any length - radix-2 or Bluestein's algorithm as needed)
+let spectrum = fft::rfft(&signal);
+
+// STFT
+let stft_config = stft::StftConfig::new(1024, 256, stft::WindowFunction::Hann);
+let frames = stft::stft(&signal, &stft_config);
+
+// Mel spectrogram
+let mel_config = mel::MelConfig { sample_rate: 44100.0, num_mels: 80, min_freq: 20.0, max_freq: 20000.0 };
+let mel_frames = mel::mel_spectrogram(&signal, &stft_config, &mel_config);
+```
+
+For Cohen's class of *bilinear* time-frequency distributions (Wigner-Ville, Choi-Williams, Rihaczek, ...), see the sibling [`bilinear_tf`](https://crates.io/crates/bilinear_tf) crate - `tf` covers the standard linear transforms.
+
 ### realtime (Optional Feature)
 
-Real-time audio streaming I/O inspired by the C++ RTAudio library. Enable with the `realtime` feature.
+Real-time audio streaming I/O inspired by the C++ RTAudio library, with real hardware-clocked backends (not a simulated/dummy stream) per platform. Enable with the `realtime` feature.
 
 #### Supported Backends
 
@@ -565,6 +641,15 @@ Supported bit depths: 8, 16, 24, 32-bit
 
 ## Changelog
 
+### 2.0.0
+- **Real realtime backends**: `realtime` module restructured into per-platform backends (mirroring `mkmidilibrary`'s design) - CoreAudio (AUHAL), WASAPI (event-driven `IAudioClient`), and ALSA (blocking `snd_pcm`) now drive real, hardware-clocked audio I/O instead of a simulated dummy stream
+- **Plugin hosting**: new `host` module with a unified `HostedPlugin` trait - MKAP (always available), VST3 (`vst3` feature, hand-written COM/vtable FFI, no vendored SDK needed), and AUv2 (`au` feature, macOS)
+- **Time-frequency analysis**: new `tf` module - DFT, FFT (radix-2 + Bluestein), DCT, STFT/multi-resolution STFT, CWT, CQT, mel spectrograms
+- **SIMD**: new `simd` feature with AVX2+FMA/SSE2 (`x86_64`) and NEON (`aarch64`) dot-product/elementwise-multiply/mix primitives, used by `dsp` and `tf`'s hot loops
+- **No-allocation steady state**: `Compression`, `Limit`, and `Delay` now use pre-allocated scratch buffers instead of allocating per `run()` call
+- Dependency updates: `libloading` 0.9, `no_denormals` 0.3 (now `unsafe fn`), `windows` 0.62, `alsa` 0.9 (pinned to match `mkmidilibrary`'s native-link constraint), `mkmidilibrary` 0.2, `mkgraphic` 0.4
+- `Processor` trait gained a `num_parameters()` method (default `0`) so hosts can enumerate MKAP plugin parameters
+
 ### 1.4.0
 - **GUI support**: New `gui` feature with mkgraphic integration for plugin UI
 - Replaced `open_window()`/`close_window()` with `get_view()`, `get_view_mut()`, and `get_preferred_size()` methods
@@ -612,9 +697,4 @@ Supported bit depths: 8, 16, 24, 32-bit
 
 ## License
 
-This library is dual-licensed:
-
-- **GPL-3.0** for open source projects
-- **Commercial license** available for closed source usage
-
-For commercial licensing inquiries, contact: minjaekim@mkaudio.company
+MIT License

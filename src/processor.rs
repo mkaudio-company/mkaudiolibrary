@@ -130,9 +130,34 @@ use crate::buffer::Buffer;
 pub use mkmidilibrary::midi::MidiMessage;
 
 #[cfg(feature = "gui")]
-pub use mkgraphic::prelude::{View, Window, Extent, Point};
-#[cfg(feature = "gui")]
 pub use mkgraphic::host::WindowBuilder;
+#[cfg(feature = "gui")]
+pub use mkgraphic::prelude::{Extent, Point, View, Window};
+
+pub enum ChannelLayout {
+    Mono,
+    Stereo,
+    LCR,
+    Quad,
+    Surround5p1,
+    Surround7p1,
+    Surround7p1p2,
+    Surround7p1p4,
+}
+impl ChannelLayout {
+    pub fn num_channels(&self) -> usize {
+        match self {
+            ChannelLayout::Mono => 1,
+            ChannelLayout::Stereo => 2,
+            ChannelLayout::LCR => 3,
+            ChannelLayout::Quad => 4,
+            ChannelLayout::Surround5p1 => 6,
+            ChannelLayout::Surround7p1 => 8,
+            ChannelLayout::Surround7p1p2 => 10,
+            ChannelLayout::Surround7p1p4 => 12,
+        }
+    }
+}
 
 /// Audio I/O container for buffer-based processing.
 ///
@@ -154,50 +179,18 @@ pub use mkgraphic::host::WindowBuilder;
 ///     }
 /// }
 /// ```
-
-pub enum ChannelLayout
-{
-    Mono,
-    Stereo,
-    LCR,
-    Quad,
-    Surround5p1,
-    Surround7p1,
-    Surround7p1p2,
-    Surround7p1p4
-}
-impl ChannelLayout
-{
-    pub fn num_channels(&self) -> usize
-    {
-        match self
-        {
-            ChannelLayout::Mono => 1,
-            ChannelLayout::Stereo => 2,
-            ChannelLayout::LCR => 3,
-            ChannelLayout::Quad =>4,
-            ChannelLayout::Surround5p1 => 6,
-            ChannelLayout::Surround7p1 => 8,
-            ChannelLayout::Surround7p1p2 => 10,
-            ChannelLayout::Surround7p1p4 => 12,
-        }
-    }
-}
-
-pub struct AudioIO
-{
+pub struct AudioIO {
     /// Input audio buffers (one per channel).
-    pub input : Vec<Buffer<f64>>,
+    pub input: Vec<Buffer<f64>>,
     /// Output audio buffers (one per channel).
-    pub output : Vec<Buffer<f64>>,
+    pub output: Vec<Buffer<f64>>,
     /// Sidechain input buffers (optional, one per channel).
-    pub sidechain_in : Vec<Buffer<f64>>,
+    pub sidechain_in: Vec<Buffer<f64>>,
     /// Sidechain output buffers (optional, one per channel).
-    pub sidechain_out : Vec<Buffer<f64>>
+    pub sidechain_out: Vec<Buffer<f64>>,
 }
 
-impl AudioIO
-{
+impl AudioIO {
     /// Create a new AudioIO with the specified channel counts and buffer size.
     ///
     /// # Arguments
@@ -206,38 +199,61 @@ impl AudioIO
     /// * `sidechain_in_channels` - Number of sidechain input channels
     /// * `sidechain_out_channels` - Number of sidechain output channels
     /// * `buffer_size` - Size of each buffer in samples
-    pub fn new(input_channels : usize, output_channels : usize,
-               sidechain_in_channels : usize, sidechain_out_channels : usize,
-               buffer_size : usize) -> Self
-    {
-        Self
-        {
-            input : (0..input_channels).map(|_| Buffer::new(buffer_size)).collect(),
-            output : (0..output_channels).map(|_| Buffer::new(buffer_size)).collect(),
-            sidechain_in : (0..sidechain_in_channels).map(|_| Buffer::new(buffer_size)).collect(),
-            sidechain_out : (0..sidechain_out_channels).map(|_| Buffer::new(buffer_size)).collect()
+    pub fn new(
+        input_channels: usize,
+        output_channels: usize,
+        sidechain_in_channels: usize,
+        sidechain_out_channels: usize,
+        buffer_size: usize,
+    ) -> Self {
+        Self {
+            input: (0..input_channels)
+                .map(|_| Buffer::new(buffer_size))
+                .collect(),
+            output: (0..output_channels)
+                .map(|_| Buffer::new(buffer_size))
+                .collect(),
+            sidechain_in: (0..sidechain_in_channels)
+                .map(|_| Buffer::new(buffer_size))
+                .collect(),
+            sidechain_out: (0..sidechain_out_channels)
+                .map(|_| Buffer::new(buffer_size))
+                .collect(),
         }
     }
 
     /// Create an AudioIO with layout.
-    pub fn set_channel(layout : ChannelLayout, buffer_size : usize) -> Self
-    {
-        Self::new(layout.num_channels(), layout.num_channels(), 0, 0, buffer_size)
+    pub fn set_channel(layout: ChannelLayout, buffer_size: usize) -> Self {
+        Self::new(
+            layout.num_channels(),
+            layout.num_channels(),
+            0,
+            0,
+            buffer_size,
+        )
     }
 
     /// Resize all buffers to a new size.
-    pub fn resize(&mut self, buffer_size : usize)
-    {
-        for buf in &self.input { buf.resize(buffer_size); }
-        for buf in &self.output { buf.resize(buffer_size); }
-        for buf in &self.sidechain_in { buf.resize(buffer_size); }
-        for buf in &self.sidechain_out { buf.resize(buffer_size); }
+    pub fn resize(&mut self, buffer_size: usize) {
+        for buf in &self.input {
+            buf.resize(buffer_size);
+        }
+        for buf in &self.output {
+            buf.resize(buffer_size);
+        }
+        for buf in &self.sidechain_in {
+            buf.resize(buffer_size);
+        }
+        for buf in &self.sidechain_out {
+            buf.resize(buffer_size);
+        }
     }
 }
 
-impl Default for AudioIO
-{
-    fn default() -> Self { Self::set_channel(ChannelLayout::Stereo, 1024) }
+impl Default for AudioIO {
+    fn default() -> Self {
+        Self::set_channel(ChannelLayout::Stereo, 1024)
+    }
 }
 
 /// MIDI I/O container for MIDI message processing.
@@ -273,37 +289,33 @@ impl Default for AudioIO
 /// }
 /// ```
 #[cfg(feature = "midi")]
-pub struct MidiIO
-{
+pub struct MidiIO {
     /// Incoming MIDI messages for the current processing block.
-    pub input : Box<[Option<MidiMessage>]>,
+    pub input: Box<[Option<MidiMessage>]>,
     /// Outgoing MIDI messages to be sent after processing.
-    pub output : Box<[Option<MidiMessage>]>
+    pub output: Box<[Option<MidiMessage>]>,
 }
 
 #[cfg(feature = "midi")]
-impl MidiIO
-{
+impl MidiIO {
     /// Create a new empty MidiIO.
-    pub fn new(buffer_size : usize) -> Self
-    {
-        Self
-        {
-            input : vec![None; buffer_size].into_boxed_slice(),
-            output : vec![None; buffer_size].into_boxed_slice(),
+    pub fn new(buffer_size: usize) -> Self {
+        Self {
+            input: vec![None; buffer_size].into_boxed_slice(),
+            output: vec![None; buffer_size].into_boxed_slice(),
         }
     }
-    pub fn resize(&mut self, buffer_size : usize)
-    {
+    pub fn resize(&mut self, buffer_size: usize) {
         self.input = vec![None; buffer_size].into_boxed_slice();
         self.output = vec![None; buffer_size].into_boxed_slice();
     }
 }
 
 #[cfg(feature = "midi")]
-impl Default for MidiIO
-{
-    fn default() -> Self { Self::new(1024) }
+impl Default for MidiIO {
+    fn default() -> Self {
+        Self::new(1024)
+    }
 }
 
 /// Declare a plugin for dynamic loading.
@@ -315,16 +327,13 @@ impl Default for MidiIO
 /// * `$plugin_type` - The type implementing `Processor`
 /// * `$constructor` - Path to the constructor function (e.g., `MyPlugin::new`)
 #[macro_export]
-macro_rules! declare_plugin
-{
-    ($plugin_type:ty, $constructor:path) =>
-    {
+macro_rules! declare_plugin {
+    ($plugin_type:ty, $constructor:path) => {
         #[no_mangle]
-        pub extern "C" fn _create() -> *mut dyn Processor
-        {
-            let constructor : fn() -> $plugin_type = $constructor;
+        pub extern "C" fn _create() -> *mut dyn Processor {
+            let constructor: fn() -> $plugin_type = $constructor;
             let object = constructor();
-            let boxed : Box<dyn Processor> = Box::new(object);
+            let boxed: Box<dyn Processor> = Box::new(object);
             Box::into_raw(boxed)
         }
     };
@@ -343,8 +352,7 @@ macro_rules! declare_plugin
 /// ## MIDI Support
 /// When the `midi` feature is enabled, use `run_with_midi` for processors that
 /// need MIDI input/output. The default implementation calls `run` and ignores MIDI.
-pub trait Processor
-{
+pub trait Processor {
     /// Initialize the processor after loading.
     /// Called once when the plugin is first loaded.
     fn init(&mut self);
@@ -352,15 +360,24 @@ pub trait Processor
     /// Get the display name of the processor.
     fn name(&self) -> String;
 
+    /// Get the number of automatable parameters.
+    ///
+    /// Defaults to 0. Override this so hosts (including
+    /// [`crate::host`]'s unified plugin hosting) can enumerate parameters
+    /// without guessing indices.
+    fn num_parameters(&self) -> usize {
+        0
+    }
+
     /// Get the value of a parameter by index.
     /// Returns a value typically in the range 0.0 to 1.0.
-    fn get_parameter(&self, index : usize) -> f64;
+    fn get_parameter(&self, index: usize) -> f64;
 
     /// Set the value of a parameter by index.
-    fn set_parameter(&mut self, index : usize, value : f64);
+    fn set_parameter(&mut self, index: usize, value: f64);
 
     /// Get the display name of a parameter by index.
-    fn get_parameter_name(&self, index : usize) -> String;
+    fn get_parameter_name(&self, index: usize) -> String;
 
     /// Get the plugin's UI view.
     ///
@@ -389,8 +406,7 @@ pub trait Processor
     /// Only available with the `gui` feature enabled.
     /// Returns the preferred width and height as an Extent.
     #[cfg(feature = "gui")]
-    fn get_preferred_size(&self) -> Extent
-    {
+    fn get_preferred_size(&self) -> Extent {
         Extent::new(400.0, 300.0)
     }
 
@@ -400,7 +416,7 @@ pub trait Processor
     /// # Arguments
     /// * `buffer_size` - Number of samples per processing block
     /// * `sample_rate` - Audio sample rate in Hz
-    fn prepare_to_play(&mut self, buffer_size : usize, sample_rate : usize);
+    fn prepare_to_play(&mut self, buffer_size: usize, sample_rate: usize);
 
     /// Process audio through the plugin.
     ///
@@ -422,7 +438,7 @@ pub trait Processor
     ///     }
     /// }
     /// ```
-    fn run(&self, audio : &mut AudioIO);
+    fn run(&self, audio: &mut AudioIO);
 
     /// Process audio with MIDI input/output.
     ///
@@ -433,7 +449,7 @@ pub trait Processor
     /// * `audio` - Audio I/O container with input/output/sidechain buffers
     /// * `midi` - MIDI I/O container with input/output message vectors
     #[cfg(feature = "midi")]
-    fn run_with_midi(&self, audio : &mut AudioIO, midi : &mut MidiIO);
+    fn run_with_midi(&self, audio: &mut AudioIO, midi: &mut MidiIO);
 }
 
 /// Load a plugin from a `.mkap` dynamic library file.
@@ -448,13 +464,11 @@ pub trait Processor
 /// # Safety
 /// This function loads and executes code from an external library.
 /// Only load plugins from trusted sources.
-pub fn load(path : &str, name : &str) -> Result<Box<dyn Processor>, libloading::Error>
-{
-    unsafe
-    {
+pub fn load(path: &str, name: &str) -> Result<Box<dyn Processor>, libloading::Error> {
+    unsafe {
         let file = format!("{}/{}.mkap", path, name);
         let lib = Library::new(&file)?;
-        let constructor : Symbol<unsafe fn() -> *mut dyn Processor> = lib.get(b"_create\0")?;
+        let constructor: Symbol<unsafe fn() -> *mut dyn Processor> = lib.get(b"_create\0")?;
         let mut plugin = Box::from_raw(constructor());
         plugin.init();
         Ok(plugin)

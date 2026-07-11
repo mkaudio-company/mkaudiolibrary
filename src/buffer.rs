@@ -2,9 +2,9 @@
 //!
 //! This module provides three buffer types designed for multi-threaded audio applications:
 //!
-//! - [`Buffer`] - General-purpose buffer with read/write locking
-//! - [`PushBuffer`] - FIFO buffer for convolution and filtering operations
-//! - [`CircularBuffer`] - Ring buffer with power-of-2 sizing for delay lines
+//! - `Buffer` - General-purpose buffer with read/write locking
+//! - `PushBuffer` - FIFO buffer for convolution and filtering operations
+//! - `CircularBuffer` - Ring buffer with power-of-2 sizing for delay lines
 //!
 //! ## Thread Safety Model
 //!
@@ -85,87 +85,88 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 ///
 /// # Thread Safety
 /// Implements `Send + Sync` for use across thread boundaries.
-pub struct Buffer<T : Clone + Default + Send + Sync>
-{
-    inner : Arc<BufferInner<T>>
+pub struct Buffer<T: Clone + Default + Send + Sync> {
+    inner: Arc<BufferInner<T>>,
 }
 
-struct BufferInner<T : Clone + Default + Send + Sync>
-{
-    data : RwLock<Box<[T]>>,
-    reference : AtomicUsize
+struct BufferInner<T: Clone + Default + Send + Sync> {
+    data: RwLock<Box<[T]>>,
+    reference: AtomicUsize,
 }
 
-impl<T : Clone + Default + Send + Sync> Buffer<T>
-{
+impl<T: Clone + Default + Send + Sync> Buffer<T> {
     /// Create a new buffer with the given length, initialized to default values.
-    pub fn new(len : usize) -> Self
-    {
-        Self
-        {
-            inner : Arc::new(BufferInner
-            {
-                data : RwLock::new(vec![T::default(); len].into_boxed_slice()),
-                reference : AtomicUsize::new(1)
-            })
+    pub fn new(len: usize) -> Self {
+        Self {
+            inner: Arc::new(BufferInner {
+                data: RwLock::new(vec![T::default(); len].into_boxed_slice()),
+                reference: AtomicUsize::new(1),
+            }),
         }
     }
 
     /// Create a buffer from an existing slice (copies data).
-    pub fn from_slice(slice : &[T]) -> Self
-    {
-        Self
-        {
-            inner : Arc::new(BufferInner
-            {
-                data : RwLock::new(slice.to_vec().into_boxed_slice()),
-                reference : AtomicUsize::new(1)
-            })
+    pub fn from_slice(slice: &[T]) -> Self {
+        Self {
+            inner: Arc::new(BufferInner {
+                data: RwLock::new(slice.to_vec().into_boxed_slice()),
+                reference: AtomicUsize::new(1),
+            }),
         }
     }
 
     /// Acquire a read lock for shared access.
-    pub fn read(&self) -> BufferReadGuard<'_, T>
-    {
-        BufferReadGuard { guard : self.inner.data.read().unwrap() }
+    pub fn read(&self) -> BufferReadGuard<'_, T> {
+        BufferReadGuard {
+            guard: self.inner.data.read().unwrap(),
+        }
     }
 
     /// Try to acquire a read lock without blocking.
-    pub fn try_read(&self) -> Option<BufferReadGuard<'_, T>>
-    {
-        self.inner.data.try_read().ok().map(|guard| BufferReadGuard { guard })
+    pub fn try_read(&self) -> Option<BufferReadGuard<'_, T>> {
+        self.inner
+            .data
+            .try_read()
+            .ok()
+            .map(|guard| BufferReadGuard { guard })
     }
 
     /// Acquire a write lock for exclusive access.
-    pub fn write(&self) -> BufferWriteGuard<'_, T>
-    {
-        BufferWriteGuard { guard : self.inner.data.write().unwrap() }
+    pub fn write(&self) -> BufferWriteGuard<'_, T> {
+        BufferWriteGuard {
+            guard: self.inner.data.write().unwrap(),
+        }
     }
 
     /// Try to acquire a write lock without blocking.
-    pub fn try_write(&self) -> Option<BufferWriteGuard<'_, T>>
-    {
-        self.inner.data.try_write().ok().map(|guard| BufferWriteGuard { guard })
+    pub fn try_write(&self) -> Option<BufferWriteGuard<'_, T>> {
+        self.inner
+            .data
+            .try_write()
+            .ok()
+            .map(|guard| BufferWriteGuard { guard })
     }
 
     /// Resize the buffer (acquires write lock internally).
-    pub fn resize(&self, len : usize)
-    {
+    pub fn resize(&self, len: usize) {
         let mut guard = self.inner.data.write().unwrap();
         *guard = vec![T::default(); len].into_boxed_slice();
     }
 
     /// Get the length of the buffer.
-    pub fn len(&self) -> usize
-    {
+    pub fn len(&self) -> usize {
         self.inner.data.read().unwrap().len()
     }
 
     /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Get the current reference count.
-    pub fn ref_count(&self) -> usize { self.inner.reference.load(Ordering::Acquire) }
+    pub fn ref_count(&self) -> usize {
+        self.inner.reference.load(Ordering::Acquire)
+    }
 }
 
 /// RAII read guard for [`Buffer`].
@@ -174,23 +175,26 @@ impl<T : Clone + Default + Send + Sync> Buffer<T>
 /// exist simultaneously. Implements `Deref<Target = [T]>` for slice access.
 ///
 /// The lock is released when this guard is dropped.
-pub struct BufferReadGuard<'a, T : Clone + Default + Send + Sync>
-{
-    guard : RwLockReadGuard<'a, Box<[T]>>
+pub struct BufferReadGuard<'a, T: Clone + Default + Send + Sync> {
+    guard: RwLockReadGuard<'a, Box<[T]>>,
 }
 
-impl<'a, T : Clone + Default + Send + Sync> std::ops::Deref for BufferReadGuard<'a, T>
-{
+impl<'a, T: Clone + Default + Send + Sync> std::ops::Deref for BufferReadGuard<'a, T> {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { &self.guard }
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
 }
 
-impl<'a, T : Clone + Default + Send + Sync> BufferReadGuard<'a, T>
-{
+impl<'a, T: Clone + Default + Send + Sync> BufferReadGuard<'a, T> {
     /// Get the number of elements in the buffer.
-    pub fn len(&self) -> usize { self.guard.len() }
+    pub fn len(&self) -> usize {
+        self.guard.len()
+    }
     /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool { self.guard.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.guard.is_empty()
+    }
 }
 
 /// RAII write guard for [`Buffer`].
@@ -199,53 +203,56 @@ impl<'a, T : Clone + Default + Send + Sync> BufferReadGuard<'a, T>
 /// can exist at a time. Implements `DerefMut<Target = [T]>` for slice access.
 ///
 /// The lock is released when this guard is dropped.
-pub struct BufferWriteGuard<'a, T : Clone + Default + Send + Sync>
-{
-    guard : RwLockWriteGuard<'a, Box<[T]>>
+pub struct BufferWriteGuard<'a, T: Clone + Default + Send + Sync> {
+    guard: RwLockWriteGuard<'a, Box<[T]>>,
 }
 
-impl<'a, T : Clone + Default + Send + Sync> std::ops::Deref for BufferWriteGuard<'a, T>
-{
+impl<'a, T: Clone + Default + Send + Sync> std::ops::Deref for BufferWriteGuard<'a, T> {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { &self.guard }
-}
-
-impl<'a, T : Clone + Default + Send + Sync> std::ops::DerefMut for BufferWriteGuard<'a, T>
-{
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.guard }
-}
-
-impl<'a, T : Clone + Default + Send + Sync> BufferWriteGuard<'a, T>
-{
-    /// Get the number of elements in the buffer.
-    pub fn len(&self) -> usize { self.guard.len() }
-    /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool { self.guard.is_empty() }
-}
-
-impl<T : Clone + Default + Send + Sync> Clone for Buffer<T>
-{
-    fn clone(&self) -> Self
-    {
-        self.inner.reference.fetch_add(1, Ordering::AcqRel);
-        Self { inner : Arc::clone(&self.inner) }
+    fn deref(&self) -> &Self::Target {
+        &self.guard
     }
 }
 
-impl<T : Clone + Default + Send + Sync> Drop for Buffer<T>
-{
-    fn drop(&mut self)
-    {
+impl<'a, T: Clone + Default + Send + Sync> std::ops::DerefMut for BufferWriteGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl<'a, T: Clone + Default + Send + Sync> BufferWriteGuard<'a, T> {
+    /// Get the number of elements in the buffer.
+    pub fn len(&self) -> usize {
+        self.guard.len()
+    }
+    /// Check if the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.guard.is_empty()
+    }
+}
+
+impl<T: Clone + Default + Send + Sync> Clone for Buffer<T> {
+    fn clone(&self) -> Self {
+        self.inner.reference.fetch_add(1, Ordering::AcqRel);
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T: Clone + Default + Send + Sync> Drop for Buffer<T> {
+    fn drop(&mut self) {
         self.inner.reference.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
-unsafe impl<T : Clone + Default + Send + Sync> Send for Buffer<T> {}
-unsafe impl<T : Clone + Default + Send + Sync> Sync for Buffer<T> {}
+unsafe impl<T: Clone + Default + Send + Sync> Send for Buffer<T> {}
+unsafe impl<T: Clone + Default + Send + Sync> Sync for Buffer<T> {}
 
-impl<T : Clone + Default + Send + Sync> Default for Buffer<T>
-{
-    fn default() -> Self { Self::new(0) }
+impl<T: Clone + Default + Send + Sync> Default for Buffer<T> {
+    fn default() -> Self {
+        Self::new(0)
+    }
 }
 
 // ==========================================
@@ -270,85 +277,80 @@ impl<T : Clone + Default + Send + Sync> Default for Buffer<T>
 /// # Thread Safety
 /// Uses `RwLock` for concurrent access. Multiple readers can access
 /// simultaneously; writers get exclusive access.
-pub struct PushBuffer<T : Copy + Default + Send + Sync>
-{
-    inner : Arc<PushBufferInner<T>>
+pub struct PushBuffer<T: Copy + Default + Send + Sync> {
+    inner: Arc<PushBufferInner<T>>,
 }
 
-struct PushBufferInner<T : Copy + Default + Send + Sync>
-{
-    data : RwLock<PushBufferData<T>>
+struct PushBufferInner<T: Copy + Default + Send + Sync> {
+    data: RwLock<PushBufferData<T>>,
 }
 
-struct PushBufferData<T : Copy + Default>
-{
-    buffer : Box<[T]>,
-    index : usize
+struct PushBufferData<T: Copy + Default> {
+    buffer: Box<[T]>,
+    index: usize,
 }
 
-impl<T : Copy + Default + Send + Sync> PushBuffer<T>
-{
+impl<T: Copy + Default + Send + Sync> PushBuffer<T> {
     /// Create a new push buffer with the given length.
     ///
     /// Buffer is initialized with default values and the write index at 0.
-    pub fn new(len : usize) -> Result<Self, LayoutError>
-    {
-        Ok(Self
-        {
-            inner : Arc::new(PushBufferInner
-            {
-                data : RwLock::new(PushBufferData
-                {
-                    buffer : vec![T::default(); len].into_boxed_slice(),
-                    index : 0
-                })
-            })
+    pub fn new(len: usize) -> Result<Self, LayoutError> {
+        Ok(Self {
+            inner: Arc::new(PushBufferInner {
+                data: RwLock::new(PushBufferData {
+                    buffer: vec![T::default(); len].into_boxed_slice(),
+                    index: 0,
+                }),
+            }),
         })
     }
 
     /// Create a push buffer from an existing slice.
-    pub fn from_slice(slice : &[T]) -> Self
-    {
-        Self
-        {
-            inner : Arc::new(PushBufferInner
-            {
-                data : RwLock::new(PushBufferData
-                {
-                    buffer : slice.to_vec().into_boxed_slice(),
-                    index : 0
-                })
-            })
+    pub fn from_slice(slice: &[T]) -> Self {
+        Self {
+            inner: Arc::new(PushBufferInner {
+                data: RwLock::new(PushBufferData {
+                    buffer: slice.to_vec().into_boxed_slice(),
+                    index: 0,
+                }),
+            }),
         }
     }
 
     /// Acquire a read lock.
-    pub fn read(&self) -> PushBufferReadGuard<'_, T>
-    {
-        PushBufferReadGuard { guard : self.inner.data.read().unwrap() }
+    pub fn read(&self) -> PushBufferReadGuard<'_, T> {
+        PushBufferReadGuard {
+            guard: self.inner.data.read().unwrap(),
+        }
     }
 
     /// Try to acquire a read lock without blocking.
-    pub fn try_read(&self) -> Option<PushBufferReadGuard<'_, T>>
-    {
-        self.inner.data.try_read().ok().map(|guard| PushBufferReadGuard { guard })
+    pub fn try_read(&self) -> Option<PushBufferReadGuard<'_, T>> {
+        self.inner
+            .data
+            .try_read()
+            .ok()
+            .map(|guard| PushBufferReadGuard { guard })
     }
 
     /// Acquire a write lock.
-    pub fn write(&self) -> PushBufferWriteGuard<'_, T>
-    {
-        PushBufferWriteGuard { guard : self.inner.data.write().unwrap() }
+    pub fn write(&self) -> PushBufferWriteGuard<'_, T> {
+        PushBufferWriteGuard {
+            guard: self.inner.data.write().unwrap(),
+        }
     }
 
     /// Try to acquire a write lock without blocking.
-    pub fn try_write(&self) -> Option<PushBufferWriteGuard<'_, T>>
-    {
-        self.inner.data.try_write().ok().map(|guard| PushBufferWriteGuard { guard })
+    pub fn try_write(&self) -> Option<PushBufferWriteGuard<'_, T>> {
+        self.inner
+            .data
+            .try_write()
+            .ok()
+            .map(|guard| PushBufferWriteGuard { guard })
     }
 
     /// Resize the buffer, clearing all data.
-    pub fn resize(&self, len : usize) -> Result<(), LayoutError>
-    {
+    pub fn resize(&self, len: usize) -> Result<(), LayoutError> {
         let mut guard = self.inner.data.write().unwrap();
         guard.buffer = vec![T::default(); len].into_boxed_slice();
         guard.index = 0;
@@ -356,71 +358,80 @@ impl<T : Copy + Default + Send + Sync> PushBuffer<T>
     }
 
     /// Push a new value (acquires write lock internally).
-    pub fn push(&self, value : T)
-    {
+    pub fn push(&self, value: T) {
         let mut guard = self.inner.data.write().unwrap();
         let len = guard.buffer.len();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
 
-        if guard.index < len
-        {
+        if guard.index < len {
             let idx = guard.index;
             guard.buffer[idx] = value;
             guard.index += 1;
-        }
-        else
-        {
+        } else {
             guard.buffer.copy_within(1..len, 0);
             guard.buffer[len - 1] = value;
         }
     }
 
     /// Get the current write index.
-    pub fn get_index(&self) -> usize { self.inner.data.read().unwrap().index }
+    pub fn get_index(&self) -> usize {
+        self.inner.data.read().unwrap().index
+    }
 
     /// Set the write index.
-    pub fn set_index(&self, index : usize)
-    {
+    pub fn set_index(&self, index: usize) {
         let mut guard = self.inner.data.write().unwrap();
         guard.index = index.min(guard.buffer.len());
     }
 
     /// Get the length of the buffer.
-    pub fn len(&self) -> usize { self.inner.data.read().unwrap().buffer.len() }
+    pub fn len(&self) -> usize {
+        self.inner.data.read().unwrap().buffer.len()
+    }
 
     /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// RAII read guard for [`PushBuffer`].
 ///
 /// Provides immutable access to buffer contents and index state.
 /// Implements `Deref<Target = [T]>` and `Index<usize>` for element access.
-pub struct PushBufferReadGuard<'a, T : Copy + Default + Send + Sync>
-{
-    guard : RwLockReadGuard<'a, PushBufferData<T>>
+pub struct PushBufferReadGuard<'a, T: Copy + Default + Send + Sync> {
+    guard: RwLockReadGuard<'a, PushBufferData<T>>,
 }
 
-impl<'a, T : Copy + Default + Send + Sync> PushBufferReadGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> PushBufferReadGuard<'a, T> {
     /// Get the buffer length.
-    pub fn len(&self) -> usize { self.guard.buffer.len() }
+    pub fn len(&self) -> usize {
+        self.guard.buffer.len()
+    }
     /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool { self.guard.buffer.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.guard.buffer.is_empty()
+    }
     /// Get the current write index.
-    pub fn get_index(&self) -> usize { self.guard.index }
+    pub fn get_index(&self) -> usize {
+        self.guard.index
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Deref for PushBufferReadGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Deref for PushBufferReadGuard<'a, T> {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { &self.guard.buffer }
+    fn deref(&self) -> &Self::Target {
+        &self.guard.buffer
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Index<usize> for PushBufferReadGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Index<usize> for PushBufferReadGuard<'a, T> {
     type Output = T;
-    fn index(&self, index : usize) -> &Self::Output { &self.guard.buffer[index] }
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.guard.buffer[index]
+    }
 }
 
 /// RAII write guard for [`PushBuffer`].
@@ -428,73 +439,84 @@ impl<'a, T : Copy + Default + Send + Sync> std::ops::Index<usize> for PushBuffer
 /// Provides exclusive mutable access to buffer contents. Supports the `push()`
 /// operation for adding new samples. Implements `DerefMut<Target = [T]>` and
 /// `IndexMut<usize>` for element access.
-pub struct PushBufferWriteGuard<'a, T : Copy + Default + Send + Sync>
-{
-    guard : RwLockWriteGuard<'a, PushBufferData<T>>
+pub struct PushBufferWriteGuard<'a, T: Copy + Default + Send + Sync> {
+    guard: RwLockWriteGuard<'a, PushBufferData<T>>,
 }
 
-impl<'a, T : Copy + Default + Send + Sync> PushBufferWriteGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> PushBufferWriteGuard<'a, T> {
     /// Get the buffer length.
-    pub fn len(&self) -> usize { self.guard.buffer.len() }
+    pub fn len(&self) -> usize {
+        self.guard.buffer.len()
+    }
     /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool { self.guard.buffer.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.guard.buffer.is_empty()
+    }
     /// Get the current write index.
-    pub fn get_index(&self) -> usize { self.guard.index }
+    pub fn get_index(&self) -> usize {
+        self.guard.index
+    }
 
     /// Push a new sample into the buffer.
     ///
     /// If the buffer is not yet full, appends at the current index.
     /// If the buffer is full, shifts all samples left and places the new
     /// sample at the end (FIFO behavior).
-    pub fn push(&mut self, value : T)
-    {
+    pub fn push(&mut self, value: T) {
         let len = self.guard.buffer.len();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
 
-        if self.guard.index < len
-        {
+        if self.guard.index < len {
             let idx = self.guard.index;
             self.guard.buffer[idx] = value;
             self.guard.index += 1;
-        }
-        else
-        {
+        } else {
             self.guard.buffer.copy_within(1..len, 0);
             self.guard.buffer[len - 1] = value;
         }
     }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Deref for PushBufferWriteGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Deref for PushBufferWriteGuard<'a, T> {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { &self.guard.buffer }
+    fn deref(&self) -> &Self::Target {
+        &self.guard.buffer
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::DerefMut for PushBufferWriteGuard<'a, T>
-{
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.guard.buffer }
+impl<'a, T: Copy + Default + Send + Sync> std::ops::DerefMut for PushBufferWriteGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard.buffer
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Index<usize> for PushBufferWriteGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Index<usize> for PushBufferWriteGuard<'a, T> {
     type Output = T;
-    fn index(&self, index : usize) -> &Self::Output { &self.guard.buffer[index] }
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.guard.buffer[index]
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::IndexMut<usize> for PushBufferWriteGuard<'a, T>
+impl<'a, T: Copy + Default + Send + Sync> std::ops::IndexMut<usize>
+    for PushBufferWriteGuard<'a, T>
 {
-    fn index_mut(&mut self, index : usize) -> &mut Self::Output { &mut self.guard.buffer[index] }
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.guard.buffer[index]
+    }
 }
 
-impl<T : Copy + Default + Send + Sync> Clone for PushBuffer<T>
-{
-    fn clone(&self) -> Self { Self { inner : Arc::clone(&self.inner) } }
+impl<T: Copy + Default + Send + Sync> Clone for PushBuffer<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
-unsafe impl<T : Copy + Default + Send + Sync> Send for PushBuffer<T> {}
-unsafe impl<T : Copy + Default + Send + Sync> Sync for PushBuffer<T> {}
+unsafe impl<T: Copy + Default + Send + Sync> Send for PushBuffer<T> {}
+unsafe impl<T: Copy + Default + Send + Sync> Sync for PushBuffer<T> {}
 
 // ==========================================
 // CircularBuffer - Ring Buffer for Delay Lines
@@ -527,97 +549,92 @@ unsafe impl<T : Copy + Default + Send + Sync> Sync for PushBuffer<T> {}
 /// guard.push(1.0);  // Write sample
 /// let sample = guard.next();  // Read delayed sample
 /// ```
-pub struct CircularBuffer<T : Copy + Default + Send + Sync>
-{
-    inner : Arc<CircularBufferInner<T>>
+pub struct CircularBuffer<T: Copy + Default + Send + Sync> {
+    inner: Arc<CircularBufferInner<T>>,
 }
 
-struct CircularBufferInner<T : Copy + Default + Send + Sync>
-{
-    data : RwLock<CircularBufferData<T>>
+struct CircularBufferInner<T: Copy + Default + Send + Sync> {
+    data: RwLock<CircularBufferData<T>>,
 }
 
-struct CircularBufferData<T : Copy + Default>
-{
-    buffer : Box<[T]>,
-    read : usize,
-    write : usize,
-    mask : usize  // For efficient modulo: index & mask
+struct CircularBufferData<T: Copy + Default> {
+    buffer: Box<[T]>,
+    read: usize,
+    write: usize,
+    mask: usize, // For efficient modulo: index & mask
 }
 
-impl<T : Copy + Default + Send + Sync> CircularBuffer<T>
-{
+impl<T: Copy + Default + Send + Sync> CircularBuffer<T> {
     /// Create a new circular buffer with the given length.
     ///
     /// The actual length is rounded up to the next power of 2 for
     /// efficient index wrapping. For example, requesting 100 samples
     /// will allocate 128.
-    pub fn new(len : usize) -> Result<Self, LayoutError>
-    {
+    pub fn new(len: usize) -> Result<Self, LayoutError> {
         let actual_len = len.next_power_of_two().max(1);
-        Ok(Self
-        {
-            inner : Arc::new(CircularBufferInner
-            {
-                data : RwLock::new(CircularBufferData
-                {
-                    buffer : vec![T::default(); actual_len].into_boxed_slice(),
-                    read : 0,
-                    write : 0,
-                    mask : actual_len - 1
-                })
-            })
+        Ok(Self {
+            inner: Arc::new(CircularBufferInner {
+                data: RwLock::new(CircularBufferData {
+                    buffer: vec![T::default(); actual_len].into_boxed_slice(),
+                    read: 0,
+                    write: 0,
+                    mask: actual_len - 1,
+                }),
+            }),
         })
     }
 
     /// Create a circular buffer from an existing slice.
-    pub fn from_slice(slice : &[T]) -> Self
-    {
+    pub fn from_slice(slice: &[T]) -> Self {
         let len = slice.len().next_power_of_two().max(1);
         let mut buffer = vec![T::default(); len];
         buffer[..slice.len()].copy_from_slice(slice);
-        Self
-        {
-            inner : Arc::new(CircularBufferInner
-            {
-                data : RwLock::new(CircularBufferData
-                {
-                    buffer : buffer.into_boxed_slice(),
-                    read : 0,
-                    write : slice.len() & (len - 1),
-                    mask : len - 1
-                })
-            })
+        Self {
+            inner: Arc::new(CircularBufferInner {
+                data: RwLock::new(CircularBufferData {
+                    buffer: buffer.into_boxed_slice(),
+                    read: 0,
+                    write: slice.len() & (len - 1),
+                    mask: len - 1,
+                }),
+            }),
         }
     }
 
     /// Acquire a read lock.
-    pub fn read(&self) -> CircularBufferReadGuard<'_, T>
-    {
-        CircularBufferReadGuard { guard : self.inner.data.read().unwrap() }
+    pub fn read(&self) -> CircularBufferReadGuard<'_, T> {
+        CircularBufferReadGuard {
+            guard: self.inner.data.read().unwrap(),
+        }
     }
 
     /// Try to acquire a read lock without blocking.
-    pub fn try_read(&self) -> Option<CircularBufferReadGuard<'_, T>>
-    {
-        self.inner.data.try_read().ok().map(|guard| CircularBufferReadGuard { guard })
+    pub fn try_read(&self) -> Option<CircularBufferReadGuard<'_, T>> {
+        self.inner
+            .data
+            .try_read()
+            .ok()
+            .map(|guard| CircularBufferReadGuard { guard })
     }
 
     /// Acquire a write lock.
-    pub fn write(&self) -> CircularBufferWriteGuard<'_, T>
-    {
-        CircularBufferWriteGuard { guard : self.inner.data.write().unwrap() }
+    pub fn write(&self) -> CircularBufferWriteGuard<'_, T> {
+        CircularBufferWriteGuard {
+            guard: self.inner.data.write().unwrap(),
+        }
     }
 
     /// Try to acquire a write lock without blocking.
-    pub fn try_write(&self) -> Option<CircularBufferWriteGuard<'_, T>>
-    {
-        self.inner.data.try_write().ok().map(|guard| CircularBufferWriteGuard { guard })
+    pub fn try_write(&self) -> Option<CircularBufferWriteGuard<'_, T>> {
+        self.inner
+            .data
+            .try_write()
+            .ok()
+            .map(|guard| CircularBufferWriteGuard { guard })
     }
 
     /// Resize the buffer, clearing all data.
-    pub fn resize(&self, len : usize) -> Result<(), LayoutError>
-    {
+    pub fn resize(&self, len: usize) -> Result<(), LayoutError> {
         let actual_len = len.next_power_of_two().max(1);
         let mut guard = self.inner.data.write().unwrap();
         guard.buffer = vec![T::default(); actual_len].into_boxed_slice();
@@ -628,8 +645,7 @@ impl<T : Copy + Default + Send + Sync> CircularBuffer<T>
     }
 
     /// Push a value and advance write pointer (acquires write lock).
-    pub fn push(&self, value : T)
-    {
+    pub fn push(&self, value: T) {
         let mut guard = self.inner.data.write().unwrap();
         let idx = guard.write;
         guard.buffer[idx] = value;
@@ -637,8 +653,7 @@ impl<T : Copy + Default + Send + Sync> CircularBuffer<T>
     }
 
     /// Read the next value and advance read pointer (acquires write lock).
-    pub fn next(&self) -> T
-    {
+    pub fn next(&self) -> T {
         let mut guard = self.inner.data.write().unwrap();
         let value = guard.buffer[guard.read];
         guard.read = (guard.read + 1) & guard.mask;
@@ -646,24 +661,28 @@ impl<T : Copy + Default + Send + Sync> CircularBuffer<T>
     }
 
     /// Peek at value without advancing (acquires read lock).
-    pub fn peek(&self) -> T
-    {
+    pub fn peek(&self) -> T {
         let guard = self.inner.data.read().unwrap();
         guard.buffer[guard.read]
     }
 
     /// Get capacity (power of 2).
-    pub fn capacity(&self) -> usize { self.inner.data.read().unwrap().buffer.len() }
+    pub fn capacity(&self) -> usize {
+        self.inner.data.read().unwrap().buffer.len()
+    }
 
     /// Get logical length.
-    pub fn len(&self) -> usize { self.inner.data.read().unwrap().mask + 1 }
+    pub fn len(&self) -> usize {
+        self.inner.data.read().unwrap().mask + 1
+    }
 
     /// Check if empty.
-    pub fn is_empty(&self) -> bool { self.capacity() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.capacity() == 0
+    }
 
     /// Clear buffer to default values.
-    pub fn clear(&self)
-    {
+    pub fn clear(&self) {
         let mut guard = self.inner.data.write().unwrap();
         guard.buffer.fill(T::default());
         guard.read = 0;
@@ -676,43 +695,58 @@ impl<T : Copy + Default + Send + Sync> CircularBuffer<T>
 /// Provides immutable access to buffer contents and pointer state.
 /// Implements `Deref<Target = [T]>` for raw buffer access and
 /// `Index<usize>` with automatic index wrapping.
-pub struct CircularBufferReadGuard<'a, T : Copy + Default + Send + Sync>
-{
-    guard : RwLockReadGuard<'a, CircularBufferData<T>>
+pub struct CircularBufferReadGuard<'a, T: Copy + Default + Send + Sync> {
+    guard: RwLockReadGuard<'a, CircularBufferData<T>>,
 }
 
-impl<'a, T : Copy + Default + Send + Sync> CircularBufferReadGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> CircularBufferReadGuard<'a, T> {
     /// Get the logical buffer length (power of 2).
-    pub fn len(&self) -> usize { self.guard.mask + 1 }
+    pub fn len(&self) -> usize {
+        self.guard.mask + 1
+    }
+    /// Check if the buffer is empty (zero capacity).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Get the actual buffer capacity.
-    pub fn capacity(&self) -> usize { self.guard.buffer.len() }
+    pub fn capacity(&self) -> usize {
+        self.guard.buffer.len()
+    }
     /// Get the current read pointer position.
-    pub fn get_read(&self) -> usize { self.guard.read }
+    pub fn get_read(&self) -> usize {
+        self.guard.read
+    }
     /// Get the current write pointer position.
-    pub fn get_write(&self) -> usize { self.guard.write }
+    pub fn get_write(&self) -> usize {
+        self.guard.write
+    }
     /// Peek at the sample at the read position without advancing.
-    pub fn peek(&self) -> T { self.guard.buffer[self.guard.read] }
+    pub fn peek(&self) -> T {
+        self.guard.buffer[self.guard.read]
+    }
 
     /// Read a sample at an offset from the read position.
     ///
     /// Index wraps automatically using the buffer mask.
-    pub fn read_offset(&self, offset : usize) -> T
-    {
+    pub fn read_offset(&self, offset: usize) -> T {
         self.guard.buffer[(self.guard.read + offset) & self.guard.mask]
     }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Deref for CircularBufferReadGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Deref for CircularBufferReadGuard<'a, T> {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { &self.guard.buffer }
+    fn deref(&self) -> &Self::Target {
+        &self.guard.buffer
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Index<usize> for CircularBufferReadGuard<'a, T>
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Index<usize>
+    for CircularBufferReadGuard<'a, T>
 {
     type Output = T;
-    fn index(&self, index : usize) -> &Self::Output { &self.guard.buffer[index & self.guard.mask] }
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.guard.buffer[index & self.guard.mask]
+    }
 }
 
 /// RAII write guard for [`CircularBuffer`].
@@ -720,28 +754,37 @@ impl<'a, T : Copy + Default + Send + Sync> std::ops::Index<usize> for CircularBu
 /// Provides exclusive mutable access to buffer contents. Supports ring buffer
 /// operations (`push`, `next`, `peek`) and direct element access via
 /// `DerefMut<Target = [T]>` and `IndexMut<usize>` with automatic wrapping.
-pub struct CircularBufferWriteGuard<'a, T : Copy + Default + Send + Sync>
-{
-    guard : RwLockWriteGuard<'a, CircularBufferData<T>>
+pub struct CircularBufferWriteGuard<'a, T: Copy + Default + Send + Sync> {
+    guard: RwLockWriteGuard<'a, CircularBufferData<T>>,
 }
 
-impl<'a, T : Copy + Default + Send + Sync> CircularBufferWriteGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> CircularBufferWriteGuard<'a, T> {
     /// Get the logical buffer length (power of 2).
-    pub fn len(&self) -> usize { self.guard.mask + 1 }
+    pub fn len(&self) -> usize {
+        self.guard.mask + 1
+    }
+    /// Check if the buffer is empty (zero capacity).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Get the actual buffer capacity.
-    pub fn capacity(&self) -> usize { self.guard.buffer.len() }
+    pub fn capacity(&self) -> usize {
+        self.guard.buffer.len()
+    }
     /// Get the current read pointer position.
-    pub fn get_read(&self) -> usize { self.guard.read }
+    pub fn get_read(&self) -> usize {
+        self.guard.read
+    }
     /// Get the current write pointer position.
-    pub fn get_write(&self) -> usize { self.guard.write }
+    pub fn get_write(&self) -> usize {
+        self.guard.write
+    }
 
     /// Write a sample at the write position and advance the pointer.
     ///
     /// The pointer wraps automatically when reaching the buffer end.
     #[inline]
-    pub fn push(&mut self, value : T)
-    {
+    pub fn push(&mut self, value: T) {
         let idx = self.guard.write;
         self.guard.buffer[idx] = value;
         self.guard.write = (self.guard.write + 1) & self.guard.mask;
@@ -750,79 +793,94 @@ impl<'a, T : Copy + Default + Send + Sync> CircularBufferWriteGuard<'a, T>
     /// Read a sample from the read position and advance the pointer.
     ///
     /// The pointer wraps automatically when reaching the buffer end.
+    ///
+    /// Named to match the ring buffer's `push`/`next` pair, not
+    /// `Iterator::next` (this type isn't an iterator: it never terminates
+    /// and doesn't return `Option`).
     #[inline]
-    pub fn next(&mut self) -> T
-    {
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> T {
         let value = self.guard.buffer[self.guard.read];
         self.guard.read = (self.guard.read + 1) & self.guard.mask;
         value
     }
 
     /// Peek at the sample at the read position without advancing.
-    pub fn peek(&self) -> T { self.guard.buffer[self.guard.read] }
+    pub fn peek(&self) -> T {
+        self.guard.buffer[self.guard.read]
+    }
 
     /// Read a sample at an offset from the read position.
     ///
     /// Index wraps automatically using the buffer mask.
-    pub fn read_offset(&self, offset : usize) -> T
-    {
+    pub fn read_offset(&self, offset: usize) -> T {
         self.guard.buffer[(self.guard.read + offset) & self.guard.mask]
     }
 
     /// Write a sample at an offset from the write position.
     ///
     /// Index wraps automatically using the buffer mask.
-    pub fn write_offset(&mut self, offset : usize, value : T)
-    {
+    pub fn write_offset(&mut self, offset: usize, value: T) {
         let idx = (self.guard.write + offset) & self.guard.mask;
         self.guard.buffer[idx] = value;
     }
 
     /// Set the read pointer position (masked to valid range).
-    pub fn set_read(&mut self, index : usize) { self.guard.read = index & self.guard.mask; }
+    pub fn set_read(&mut self, index: usize) {
+        self.guard.read = index & self.guard.mask;
+    }
 
     /// Set the write pointer position (masked to valid range).
-    pub fn set_write(&mut self, index : usize) { self.guard.write = index & self.guard.mask; }
+    pub fn set_write(&mut self, index: usize) {
+        self.guard.write = index & self.guard.mask;
+    }
 
     /// Clear the buffer to default values and reset pointers.
-    pub fn clear(&mut self)
-    {
+    pub fn clear(&mut self) {
         self.guard.buffer.fill(T::default());
         self.guard.read = 0;
         self.guard.write = 0;
     }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Deref for CircularBufferWriteGuard<'a, T>
-{
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Deref for CircularBufferWriteGuard<'a, T> {
     type Target = [T];
-    fn deref(&self) -> &Self::Target { &self.guard.buffer }
+    fn deref(&self) -> &Self::Target {
+        &self.guard.buffer
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::DerefMut for CircularBufferWriteGuard<'a, T>
-{
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.guard.buffer }
+impl<'a, T: Copy + Default + Send + Sync> std::ops::DerefMut for CircularBufferWriteGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard.buffer
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::Index<usize> for CircularBufferWriteGuard<'a, T>
+impl<'a, T: Copy + Default + Send + Sync> std::ops::Index<usize>
+    for CircularBufferWriteGuard<'a, T>
 {
     type Output = T;
-    fn index(&self, index : usize) -> &Self::Output { &self.guard.buffer[index & self.guard.mask] }
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.guard.buffer[index & self.guard.mask]
+    }
 }
 
-impl<'a, T : Copy + Default + Send + Sync> std::ops::IndexMut<usize> for CircularBufferWriteGuard<'a, T>
+impl<'a, T: Copy + Default + Send + Sync> std::ops::IndexMut<usize>
+    for CircularBufferWriteGuard<'a, T>
 {
-    fn index_mut(&mut self, index : usize) -> &mut Self::Output
-    {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         let idx = index & self.guard.mask;
         &mut self.guard.buffer[idx]
     }
 }
 
-impl<T : Copy + Default + Send + Sync> Clone for CircularBuffer<T>
-{
-    fn clone(&self) -> Self { Self { inner : Arc::clone(&self.inner) } }
+impl<T: Copy + Default + Send + Sync> Clone for CircularBuffer<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
-unsafe impl<T : Copy + Default + Send + Sync> Send for CircularBuffer<T> {}
-unsafe impl<T : Copy + Default + Send + Sync> Sync for CircularBuffer<T> {}
+unsafe impl<T: Copy + Default + Send + Sync> Send for CircularBuffer<T> {}
+unsafe impl<T: Copy + Default + Send + Sync> Sync for CircularBuffer<T> {}

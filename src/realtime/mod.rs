@@ -8,9 +8,14 @@
 //!
 //! | Platform | Backend | API |
 //! |----------|---------|-----|
-//! | macOS | CoreAudio | `Api::CoreAudio` |
+//! | macOS | CoreAudio (AUHAL) | `Api::CoreAudio` |
 //! | Windows | WASAPI | `Api::Wasapi` |
 //! | Linux | ALSA | `Api::Alsa` |
+//!
+//! Each backend drives a real, callback-based hardware audio stream (no
+//! simulated timing) via a small internal `Backend` trait, mirroring
+//! upstream RtAudio's `RtApi` base class and its per-platform subclasses
+//! (`RtApiCore`, `RtApiWasapi`, `RtApiAlsa`).
 //!
 //! # Audio Format
 //!
@@ -21,7 +26,8 @@
 //! # Callback Model
 //!
 //! Audio processing uses a callback function that receives input samples and fills
-//! output samples. The callback runs in a high-priority audio thread.
+//! output samples. The callback runs in a high-priority audio thread owned by the
+//! platform's audio driver (not a library-managed sleep loop).
 //!
 //! ```ignore
 //! use mkaudiolibrary::realtime::{Realtime, StreamParameters, AudioCallback};
@@ -88,8 +94,22 @@
 //! });
 //! ```
 
+mod dummy_impl;
+
+#[cfg(target_os = "macos")]
+mod coreaudio_impl;
+
+#[cfg(target_os = "windows")]
+mod wasapi_impl;
+
+#[cfg(target_os = "linux")]
+mod alsa_impl;
+
 use std::fmt;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::buffer::Buffer;
 
@@ -100,10 +120,10 @@ use crate::buffer::Buffer;
 /// Audio API backend specifier.
 ///
 /// Translated from `RtAudio::Api` enum in the C++ RTAudio library.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Api
-{
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Api {
     /// Search for a working compiled API (default).
+    #[default]
     Unspecified,
     /// macOS CoreAudio API.
     CoreAudio,
@@ -125,17 +145,9 @@ pub enum Api
     Dummy,
 }
 
-impl Default for Api
-{
-    fn default() -> Self { Self::Unspecified }
-}
-
-impl fmt::Display for Api
-{
-    fn fmt(&self, f : &mut fmt::Formatter<'_>) -> fmt::Result
-    {
-        let name = match self
-        {
+impl fmt::Display for Api {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
             Api::Unspecified => "Unspecified",
             Api::CoreAudio => "CoreAudio",
             Api::Alsa => "ALSA",
@@ -155,9 +167,8 @@ impl fmt::Display for Api
 ///
 /// Translated from `RtAudioFormat` flags in the C++ RTAudio library.
 /// Note: This library normalizes all formats to f64 internally.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SampleFormat
-{
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SampleFormat {
     /// 8-bit signed integer.
     Int8,
     /// 16-bit signed integer.
@@ -169,21 +180,14 @@ pub enum SampleFormat
     /// 32-bit floating point normalized between ±1.0.
     Float32,
     /// 64-bit floating point normalized between ±1.0.
+    #[default]
     Float64,
 }
 
-impl Default for SampleFormat
-{
-    fn default() -> Self { Self::Float64 }
-}
-
-impl SampleFormat
-{
+impl SampleFormat {
     /// Get the size in bytes for this format.
-    pub fn byte_size(&self) -> usize
-    {
-        match self
-        {
+    pub fn byte_size(&self) -> usize {
+        match self {
             SampleFormat::Int8 => 1,
             SampleFormat::Int16 => 2,
             SampleFormat::Int24 => 3,
@@ -198,28 +202,26 @@ impl SampleFormat
 ///
 /// Translated from `RtAudioStreamFlags` in the C++ RTAudio library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct StreamFlags
-{
+pub struct StreamFlags {
     /// Use non-interleaved buffers (default: interleaved).
-    pub noninterleaved : bool,
+    pub noninterleaved: bool,
     /// Attempt to minimize latency.
-    pub minimize_latency : bool,
+    pub minimize_latency: bool,
     /// Attempt to grab device for exclusive use.
-    pub hog_device : bool,
+    pub hog_device: bool,
     /// Try to select realtime scheduling for callback thread.
-    pub schedule_realtime : bool,
+    pub schedule_realtime: bool,
 }
 
 /// Stream status indicators passed to callback.
 ///
 /// Translated from `RtAudioStreamStatus` in the C++ RTAudio library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct StreamStatus
-{
+pub struct StreamStatus {
     /// Input data was discarded due to overflow.
-    pub input_overflow : bool,
+    pub input_overflow: bool,
     /// Output buffer ran empty (underflow).
-    pub output_underflow : bool,
+    pub output_underflow: bool,
 }
 
 // ==========================================
@@ -230,22 +232,18 @@ pub struct StreamStatus
 ///
 /// Translated from `RtAudio::StreamParameters` in the C++ RTAudio library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StreamParameters
-{
+pub struct StreamParameters {
     /// Device identifier (0 = first device).
-    pub device_id : usize,
+    pub device_id: usize,
     /// Number of channels to open.
-    pub num_channels : usize,
+    pub num_channels: usize,
     /// First channel index on the device.
-    pub first_channel : usize,
+    pub first_channel: usize,
 }
 
-impl Default for StreamParameters
-{
-    fn default() -> Self
-    {
-        Self
-        {
+impl Default for StreamParameters {
+    fn default() -> Self {
+        Self {
             device_id: 0,
             num_channels: 2,
             first_channel: 0,
@@ -257,52 +255,47 @@ impl Default for StreamParameters
 ///
 /// Translated from `RtAudio::StreamOptions` in the C++ RTAudio library.
 #[derive(Debug, Clone, Default)]
-pub struct StreamOptions
-{
+pub struct StreamOptions {
     /// Stream configuration flags.
-    pub flags : StreamFlags,
+    pub flags: StreamFlags,
     /// Number of buffers for the stream (0 = auto).
-    pub number_of_buffers : usize,
+    pub number_of_buffers: usize,
     /// Stream name (for JACK, etc.).
-    pub stream_name : String,
+    pub stream_name: String,
     /// Scheduling priority (1-99, 0 = default).
-    pub priority : i32,
+    pub priority: i32,
 }
 
 /// Information about an audio device.
 ///
 /// Translated from `RtAudio::DeviceInfo` in the C++ RTAudio library.
 #[derive(Debug, Clone)]
-pub struct DeviceInfo
-{
+pub struct DeviceInfo {
     /// Device identifier.
-    pub id : usize,
+    pub id: usize,
     /// Character string for device name.
-    pub name : String,
+    pub name: String,
     /// Maximum output channels supported.
-    pub output_channels : usize,
+    pub output_channels: usize,
     /// Maximum input channels supported.
-    pub input_channels : usize,
+    pub input_channels: usize,
     /// Maximum simultaneous input/output channels.
-    pub duplex_channels : usize,
+    pub duplex_channels: usize,
     /// Whether this is the default output device.
-    pub is_default_output : bool,
+    pub is_default_output: bool,
     /// Whether this is the default input device.
-    pub is_default_input : bool,
+    pub is_default_input: bool,
     /// Supported sample rates.
-    pub sample_rates : Vec<usize>,
+    pub sample_rates: Vec<usize>,
     /// Preferred sample rate.
-    pub preferred_sample_rate : usize,
+    pub preferred_sample_rate: usize,
     /// Native sample formats supported.
-    pub native_formats : Vec<SampleFormat>,
+    pub native_formats: Vec<SampleFormat>,
 }
 
-impl Default for DeviceInfo
-{
-    fn default() -> Self
-    {
-        Self
-        {
+impl Default for DeviceInfo {
+    fn default() -> Self {
+        Self {
             id: 0,
             name: String::new(),
             output_channels: 0,
@@ -325,8 +318,7 @@ impl Default for DeviceInfo
 ///
 /// Translated from `RtAudioErrorType` in the C++ RTAudio library.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MKAudioError
-{
+pub enum MKAudioError {
     /// A non-critical error.
     Warning(String),
     /// A non-critical error which might be useful for debugging.
@@ -353,12 +345,9 @@ pub enum MKAudioError
     ThreadError(String),
 }
 
-impl std::fmt::Display for MKAudioError
-{
-    fn fmt(&self, f : &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    {
-        match self
-        {
+impl std::fmt::Display for MKAudioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
             MKAudioError::Warning(s) => write!(f, "Warning: {}", s),
             MKAudioError::DebugWarning(s) => write!(f, "Debug: {}", s),
             MKAudioError::Unspecified(s) => write!(f, "Error: {}", s),
@@ -389,8 +378,8 @@ pub type MKAudioResult<T> = Result<T, MKAudioError>;
 /// Translated from `RtAudioCallback` in the C++ RTAudio library.
 ///
 /// # Arguments
-/// * `output` - Output buffer to fill (interleaved samples)
-/// * `input` - Input buffer to read (interleaved samples)
+/// * `output` - Output buffer to fill (interleaved samples), empty for an input-only stream
+/// * `input` - Input buffer to read (interleaved samples), empty for an output-only stream
 /// * `frames` - Number of frames (samples per channel)
 /// * `stream_time` - Stream time in seconds since start
 /// * `status` - Stream status flags (overflow/underflow)
@@ -399,51 +388,67 @@ pub type MKAudioResult<T> = Result<T, MKAudioError>;
 /// * `0` - Continue streaming
 /// * `1` - Stop stream and drain output
 /// * `2` - Abort stream immediately
+///
+/// # Realtime Safety
+/// This closure runs on the platform's real-time audio thread. Avoid
+/// allocating, blocking locks, or anything else that could stall it.
 pub type AudioCallback = Box<dyn FnMut(&mut [f64], &[f64], usize, f64, StreamStatus) -> i32 + Send>;
 
 // ==========================================
-// Stream State
+// Backend trait - one real implementation per platform
 // ==========================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamState
-{
+pub(crate) enum StreamState {
     Closed,
     Stopped,
     Running,
 }
 
-struct StreamData
-{
-    output_params : Option<StreamParameters>,
-    input_params : Option<StreamParameters>,
-    sample_rate : usize,
-    buffer_frames : usize,
-    options : StreamOptions,
-    state : StreamState,
-    stream_time : f64,
+/// Internal per-platform audio I/O backend, analogous to upstream RtAudio's
+/// `RtApi` abstract base class. Each platform module (`coreaudio_impl`,
+/// `wasapi_impl`, `alsa_impl`, `dummy_impl`) provides one implementation
+/// that drives a real hardware-clocked callback thread — there is no
+/// library-managed sleep loop simulating timing.
+pub(crate) trait Backend: Send {
+    fn device_ids(&self) -> Vec<usize>;
+    fn device_info(&self, device_id: usize) -> MKAudioResult<DeviceInfo>;
+    fn default_output_device(&self) -> usize;
+    fn default_input_device(&self) -> usize;
 
-    // Internal buffers
-    output_buffer : Vec<f64>,
-    input_buffer : Vec<f64>,
+    /// Open (and allocate, but not yet start) a stream. Returns the actual
+    /// buffer size negotiated with the device.
+    #[allow(clippy::too_many_arguments)]
+    fn open_stream(
+        &mut self,
+        output_params: Option<&StreamParameters>,
+        input_params: Option<&StreamParameters>,
+        sample_rate: usize,
+        buffer_frames: usize,
+        callback: AudioCallback,
+        options: &StreamOptions,
+    ) -> MKAudioResult<usize>;
+
+    fn start(&mut self) -> MKAudioResult<()>;
+    fn stop(&mut self) -> MKAudioResult<()>;
+    fn close(&mut self);
+    fn is_running(&self) -> bool;
+    fn stream_time(&self) -> f64;
+    fn latency_samples(&self) -> usize;
 }
 
-impl Default for StreamData
-{
-    fn default() -> Self
-    {
-        Self
-        {
-            output_params: None,
-            input_params: None,
-            sample_rate: 44100,
-            buffer_frames: 256,
-            options: StreamOptions::default(),
-            state: StreamState::Closed,
-            stream_time: 0.0,
-            output_buffer: Vec::new(),
-            input_buffer: Vec::new(),
-        }
+fn make_backend(api: Api) -> Box<dyn Backend> {
+    match api {
+        #[cfg(target_os = "macos")]
+        Api::CoreAudio => Box::new(coreaudio_impl::CoreAudioBackend::new()),
+
+        #[cfg(target_os = "windows")]
+        Api::Wasapi => Box::new(wasapi_impl::WasapiBackend::new()),
+
+        #[cfg(target_os = "linux")]
+        Api::Alsa | Api::Pulse => Box::new(alsa_impl::AlsaBackend::new()),
+
+        _ => Box::new(dummy_impl::DummyBackend::new()),
     }
 }
 
@@ -454,13 +459,16 @@ impl Default for StreamData
 /// Real-time audio I/O class.
 ///
 /// Provides a common API for real-time audio input/output across multiple
-/// platforms. This is a direct translation of the C++ RTAudio class API.
+/// platforms. This is a direct translation of the C++ RTAudio class API,
+/// backed by a real per-platform audio driver (an internal `Backend` trait
+/// implementation - `CoreAudioBackend`, `WasapiBackend`, or `AlsaBackend`).
 ///
 /// # Thread Safety
 ///
-/// The audio callback runs in a separate high-priority thread. Use thread-safe
-/// types (like `Arc<Mutex<T>>` or the library's `Buffer` types) to share state
-/// between the callback and the main thread.
+/// The audio callback runs in a separate high-priority thread owned by the
+/// platform's audio driver. Use thread-safe types (like `Arc<Mutex<T>>` or
+/// the library's `Buffer` types) to share state between the callback and
+/// the main thread.
 ///
 /// # Example
 ///
@@ -479,18 +487,13 @@ impl Default for StreamData
 ///     }
 /// }
 /// ```
-pub struct Realtime
-{
-    api : Api,
-    stream : Arc<Mutex<StreamData>>,
-    callback : Arc<Mutex<Option<AudioCallback>>>,
-    running : Arc<AtomicBool>,
-    thread_handle : Option<std::thread::JoinHandle<()>>,
-    show_warnings : bool,
+pub struct Realtime {
+    api: Api,
+    backend: Box<dyn Backend>,
+    show_warnings: bool,
 }
 
-impl Realtime
-{
+impl Realtime {
     /// Create a new Realtime instance.
     ///
     /// # Arguments
@@ -509,50 +512,39 @@ impl Realtime
     /// // Or specify an API
     /// let audio = Realtime::new(Some(Api::CoreAudio)).unwrap();
     /// ```
-    pub fn new(api : Option<Api>) -> MKAudioResult<Self>
-    {
+    pub fn new(api: Option<Api>) -> MKAudioResult<Self> {
         let selected_api = api.unwrap_or_else(Self::detect_api);
 
-        Ok(Self
-        {
+        Ok(Self {
             api: selected_api,
-            stream: Arc::new(Mutex::new(StreamData::default())),
-            callback: Arc::new(Mutex::new(None)),
-            running: Arc::new(AtomicBool::new(false)),
-            thread_handle: None,
+            backend: make_backend(selected_api),
             show_warnings: true,
         })
     }
 
     /// Get the current audio API in use.
-    pub fn get_current_api(&self) -> Api { self.api }
+    pub fn get_current_api(&self) -> Api {
+        self.api
+    }
 
     /// Get list of compiled APIs available on this system.
-    pub fn get_compiled_apis() -> Vec<Api>
-    {
+    pub fn get_compiled_apis() -> Vec<Api> {
         let mut apis = vec![Api::Dummy];
 
         #[cfg(target_os = "macos")]
         apis.push(Api::CoreAudio);
 
         #[cfg(target_os = "windows")]
-        {
-            apis.push(Api::Wasapi);
-            apis.push(Api::DirectSound);
-        }
+        apis.push(Api::Wasapi);
 
         #[cfg(target_os = "linux")]
-        {
-            apis.push(Api::Alsa);
-            apis.push(Api::Pulse);
-        }
+        apis.push(Api::Alsa);
 
         apis
     }
 
     /// Detect the best available API for this platform.
-    fn detect_api() -> Api
-    {
+    fn detect_api() -> Api {
         #[cfg(target_os = "macos")]
         return Api::CoreAudio;
 
@@ -567,29 +559,21 @@ impl Realtime
     }
 
     /// Get the number of audio devices available.
-    pub fn get_device_count(&self) -> usize
-    {
-        self.get_device_ids().len()
+    pub fn get_device_count(&self) -> usize {
+        self.backend.device_ids().len()
     }
 
     /// Get a list of audio device identifiers.
-    pub fn get_device_ids(&self) -> Vec<usize>
-    {
-        // Platform-specific implementation would enumerate actual devices
-        // For now, return dummy devices
-        match self.api
-        {
-            Api::Dummy => vec![0],
-            _ => vec![0, 1], // Placeholder: typically default output and input
-        }
+    pub fn get_device_ids(&self) -> Vec<usize> {
+        self.backend.device_ids()
     }
 
     /// Get a list of audio device names.
-    pub fn get_device_names(&self) -> Vec<String>
-    {
-        self.get_device_ids()
+    pub fn get_device_names(&self) -> Vec<String> {
+        self.backend
+            .device_ids()
             .iter()
-            .filter_map(|&id| self.get_device_info(id).ok())
+            .filter_map(|&id| self.backend.device_info(id).ok())
             .map(|info| info.name)
             .collect()
     }
@@ -598,83 +582,18 @@ impl Realtime
     ///
     /// # Arguments
     /// * `device_id` - Device identifier from `get_device_ids()`
-    pub fn get_device_info(&self, device_id : usize) -> MKAudioResult<DeviceInfo>
-    {
-        // Platform-specific implementation would query actual device
-        // For now, return dummy info
-        match self.api
-        {
-            Api::Dummy =>
-            {
-                if device_id == 0
-                {
-                    Ok(DeviceInfo
-                    {
-                        id: 0,
-                        name: String::from("Dummy Audio Device"),
-                        output_channels: 2,
-                        input_channels: 2,
-                        duplex_channels: 2,
-                        is_default_output: true,
-                        is_default_input: true,
-                        sample_rates: vec![44100, 48000, 96000],
-                        preferred_sample_rate: 44100,
-                        native_formats: vec![SampleFormat::Float32, SampleFormat::Float64],
-                    })
-                }
-                else
-                {
-                    Err(MKAudioError::InvalidDevice(format!("Device {} not found", device_id)))
-                }
-            }
-            _ =>
-            {
-                // Placeholder for real device enumeration
-                Ok(DeviceInfo
-                {
-                    id: device_id,
-                    name: format!("Audio Device {}", device_id),
-                    output_channels: if device_id == 0 { 2 } else { 0 },
-                    input_channels: if device_id == 1 { 2 } else { 0 },
-                    duplex_channels: 0,
-                    is_default_output: device_id == 0,
-                    is_default_input: device_id == 1,
-                    sample_rates: vec![44100, 48000, 96000],
-                    preferred_sample_rate: 48000,
-                    native_formats: vec![SampleFormat::Float32],
-                })
-            }
-        }
+    pub fn get_device_info(&self, device_id: usize) -> MKAudioResult<DeviceInfo> {
+        self.backend.device_info(device_id)
     }
 
     /// Get the default output device ID.
-    pub fn get_default_output_device(&self) -> usize
-    {
-        self.get_device_ids()
-            .iter()
-            .find(|&&id|
-            {
-                self.get_device_info(id)
-                    .map(|info| info.is_default_output)
-                    .unwrap_or(false)
-            })
-            .copied()
-            .unwrap_or(0)
+    pub fn get_default_output_device(&self) -> usize {
+        self.backend.default_output_device()
     }
 
     /// Get the default input device ID.
-    pub fn get_default_input_device(&self) -> usize
-    {
-        self.get_device_ids()
-            .iter()
-            .find(|&&id|
-            {
-                self.get_device_info(id)
-                    .map(|info| info.is_default_input)
-                    .unwrap_or(false)
-            })
-            .copied()
-            .unwrap_or(0)
+    pub fn get_default_input_device(&self) -> usize {
+        self.backend.default_input_device()
     }
 
     /// Open an audio stream.
@@ -691,274 +610,74 @@ impl Realtime
     /// The actual buffer size used (may differ from requested).
     pub fn open_stream(
         &mut self,
-        output_params : Option<&StreamParameters>,
-        input_params : Option<&StreamParameters>,
-        sample_rate : usize,
-        buffer_frames : usize,
-        callback : AudioCallback,
-        options : Option<StreamOptions>,
-    ) -> MKAudioResult<usize>
-    {
-        // Validate parameters
-        if output_params.is_none() && input_params.is_none()
-        {
+        output_params: Option<&StreamParameters>,
+        input_params: Option<&StreamParameters>,
+        sample_rate: usize,
+        buffer_frames: usize,
+        callback: AudioCallback,
+        options: Option<StreamOptions>,
+    ) -> MKAudioResult<usize> {
+        if output_params.is_none() && input_params.is_none() {
             return Err(MKAudioError::InvalidParameter(
-                "At least one of output or input parameters must be specified".into()
+                "At least one of output or input parameters must be specified".into(),
             ));
         }
 
-        let mut stream = self.stream.lock().unwrap();
-        if stream.state != StreamState::Closed
-        {
-            return Err(MKAudioError::InvalidUse("Stream is already open".into()));
-        }
-
-        // Calculate buffer sizes
-        let output_channels = output_params.map(|p| p.num_channels).unwrap_or(0);
-        let input_channels = input_params.map(|p| p.num_channels).unwrap_or(0);
-
-        stream.output_params = output_params.cloned();
-        stream.input_params = input_params.cloned();
-        stream.sample_rate = sample_rate;
-        stream.buffer_frames = buffer_frames;
-        stream.options = options.unwrap_or_default();
-        stream.state = StreamState::Stopped;
-        stream.stream_time = 0.0;
-
-        // Allocate buffers
-        stream.output_buffer = vec![0.0; buffer_frames * output_channels];
-        stream.input_buffer = vec![0.0; buffer_frames * input_channels];
-
-        // Store callback
-        *self.callback.lock().unwrap() = Some(callback);
-
-        Ok(buffer_frames)
+        let options = options.unwrap_or_default();
+        self.backend.open_stream(
+            output_params,
+            input_params,
+            sample_rate,
+            buffer_frames,
+            callback,
+            &options,
+        )
     }
 
     /// Close the audio stream.
-    pub fn close_stream(&mut self)
-    {
-        if self.is_stream_running()
-        {
-            let _ = self.stop_stream();
-        }
-
-        let mut stream = self.stream.lock().unwrap();
-        stream.state = StreamState::Closed;
-        stream.output_buffer.clear();
-        stream.input_buffer.clear();
-
-        *self.callback.lock().unwrap() = None;
+    pub fn close_stream(&mut self) {
+        self.backend.close();
     }
 
     /// Start the audio stream.
-    pub fn start_stream(&mut self) -> MKAudioResult<()>
-    {
-        {
-            let mut stream = self.stream.lock().unwrap();
-            if stream.state == StreamState::Closed
-            {
-                return Err(MKAudioError::InvalidUse("Stream is not open".into()));
-            }
-            if stream.state == StreamState::Running
-            {
-                return Err(MKAudioError::InvalidUse("Stream is already running".into()));
-            }
-            stream.state = StreamState::Running;
-        }
-
-        self.running.store(true, Ordering::SeqCst);
-
-        // Start audio thread
-        let stream_clone = self.stream.clone();
-        let callback_clone = self.callback.clone();
-        let running_clone = self.running.clone();
-        let api = self.api;
-
-        self.thread_handle = Some(std::thread::spawn(move ||
-        {
-            Self::audio_thread(api, stream_clone, callback_clone, running_clone);
-        }));
-
-        Ok(())
+    pub fn start_stream(&mut self) -> MKAudioResult<()> {
+        self.backend.start()
     }
 
     /// Stop the audio stream.
-    pub fn stop_stream(&mut self) -> MKAudioResult<()>
-    {
-        {
-            let stream = self.stream.lock().unwrap();
-            if stream.state != StreamState::Running
-            {
-                return Err(MKAudioError::InvalidUse("Stream is not running".into()));
-            }
-        }
-
-        self.running.store(false, Ordering::SeqCst);
-
-        if let Some(handle) = self.thread_handle.take()
-        {
-            let _ = handle.join();
-        }
-
-        let mut stream = self.stream.lock().unwrap();
-        stream.state = StreamState::Stopped;
-
-        Ok(())
+    pub fn stop_stream(&mut self) -> MKAudioResult<()> {
+        self.backend.stop()
     }
 
     /// Abort the audio stream (immediate stop without draining).
-    pub fn abort_stream(&mut self) -> MKAudioResult<()>
-    {
-        self.stop_stream()
-    }
-
-    /// Check if a stream is open.
-    pub fn is_stream_open(&self) -> bool
-    {
-        let stream = self.stream.lock().unwrap();
-        stream.state != StreamState::Closed
+    pub fn abort_stream(&mut self) -> MKAudioResult<()> {
+        self.backend.stop()
     }
 
     /// Check if a stream is running.
-    pub fn is_stream_running(&self) -> bool
-    {
-        let stream = self.stream.lock().unwrap();
-        stream.state == StreamState::Running
+    pub fn is_stream_running(&self) -> bool {
+        self.backend.is_running()
     }
 
     /// Get the stream time in seconds.
-    pub fn get_stream_time(&self) -> f64
-    {
-        let stream = self.stream.lock().unwrap();
-        stream.stream_time
-    }
-
-    /// Set the stream time.
-    pub fn set_stream_time(&mut self, time : f64)
-    {
-        let mut stream = self.stream.lock().unwrap();
-        stream.stream_time = time;
+    pub fn get_stream_time(&self) -> f64 {
+        self.backend.stream_time()
     }
 
     /// Get the stream latency in samples.
-    pub fn get_stream_latency(&self) -> usize
-    {
-        let stream = self.stream.lock().unwrap();
-        stream.buffer_frames * stream.options.number_of_buffers.max(2)
-    }
-
-    /// Get the stream sample rate.
-    pub fn get_stream_sample_rate(&self) -> usize
-    {
-        let stream = self.stream.lock().unwrap();
-        stream.sample_rate
+    pub fn get_stream_latency(&self) -> usize {
+        self.backend.latency_samples()
     }
 
     /// Enable or disable warning messages.
-    pub fn show_warnings(&mut self, show : bool)
-    {
+    pub fn show_warnings(&mut self, show: bool) {
         self.show_warnings = show;
-    }
-
-    /// Audio processing thread.
-    fn audio_thread(
-        api : Api,
-        stream : Arc<Mutex<StreamData>>,
-        callback : Arc<Mutex<Option<AudioCallback>>>,
-        running : Arc<AtomicBool>,
-    )
-    {
-        let (sample_rate, buffer_frames) =
-        {
-            let s = stream.lock().unwrap();
-            (s.sample_rate, s.buffer_frames)
-        };
-
-        let frame_duration = std::time::Duration::from_secs_f64(
-            buffer_frames as f64 / sample_rate as f64
-        );
-
-        while running.load(Ordering::SeqCst)
-        {
-            let status = StreamStatus::default();
-
-            // Get current stream time and prepare buffers
-            let (stream_time, mut output_buffer, input_buffer) =
-            {
-                let mut s = stream.lock().unwrap();
-
-                // For dummy API, generate silence input
-                if api == Api::Dummy
-                {
-                    s.input_buffer.fill(0.0);
-                }
-
-                (s.stream_time, s.output_buffer.clone(), s.input_buffer.clone())
-            };
-
-            // Process callback
-            let result =
-            {
-                let mut cb_guard = callback.lock().unwrap();
-                if let Some(ref mut cb) = *cb_guard
-                {
-                    // Call user callback with cloned buffers
-                    cb(
-                        &mut output_buffer,
-                        &input_buffer,
-                        buffer_frames,
-                        stream_time,
-                        status,
-                    )
-                }
-                else
-                {
-                    0
-                }
-            };
-
-            // Copy output back and update stream time
-            {
-                let mut s = stream.lock().unwrap();
-                s.output_buffer.copy_from_slice(&output_buffer);
-                s.stream_time += buffer_frames as f64 / sample_rate as f64;
-            }
-
-            // Handle callback return value
-            match result
-            {
-                1 | 2 =>
-                {
-                    running.store(false, Ordering::SeqCst);
-                    break;
-                }
-                _ => {}
-            }
-
-            // Simulate buffer timing for dummy API
-            if api == Api::Dummy
-            {
-                std::thread::sleep(frame_duration);
-            }
-        }
-
-        // Mark stream as stopped
-        {
-            let mut s = stream.lock().unwrap();
-            s.state = StreamState::Stopped;
-        }
     }
 }
 
-impl Drop for Realtime
-{
-    fn drop(&mut self)
-    {
-        if self.is_stream_open()
-        {
-            self.close_stream();
-        }
+impl Drop for Realtime {
+    fn drop(&mut self) {
+        self.backend.close();
     }
 }
 
@@ -975,16 +694,13 @@ impl Drop for Realtime
 ///
 /// # Returns
 /// Vector of `Buffer<f64>`, one per channel.
-pub fn deinterleave(interleaved : &[f64], channels : usize, frames : usize) -> Vec<Buffer<f64>>
-{
+pub fn deinterleave(interleaved: &[f64], channels: usize, frames: usize) -> Vec<Buffer<f64>> {
     let mut buffers = Vec::with_capacity(channels);
-    for ch in 0..channels
-    {
+    for ch in 0..channels {
         let buffer = Buffer::new(frames);
         {
             let mut guard = buffer.write();
-            for frame in 0..frames
-            {
+            for frame in 0..frames {
                 guard[frame] = interleaved[frame * channels + ch];
             }
         }
@@ -999,14 +715,11 @@ pub fn deinterleave(interleaved : &[f64], channels : usize, frames : usize) -> V
 /// * `buffers` - Vector of channel buffers
 /// * `interleaved` - Output interleaved buffer to fill
 /// * `frames` - Number of frames per channel
-pub fn interleave(buffers : &[Buffer<f64>], interleaved : &mut [f64], frames : usize)
-{
+pub fn interleave(buffers: &[Buffer<f64>], interleaved: &mut [f64], frames: usize) {
     let channels = buffers.len();
-    for (ch, buffer) in buffers.iter().enumerate()
-    {
+    for (ch, buffer) in buffers.iter().enumerate() {
         let guard = buffer.read();
-        for frame in 0..frames
-        {
+        for frame in 0..frames {
             interleaved[frame * channels + ch] = guard[frame];
         }
     }
@@ -1022,19 +735,16 @@ pub fn interleave(buffers : &[Buffer<f64>], interleaved : &mut [f64], frames : u
 ///
 /// # Returns
 /// An `AudioCallback` suitable for use with `Realtime::open_stream()`.
-pub fn stereo_callback<F>(mut processor : F) -> AudioCallback
+pub fn stereo_callback<F>(mut processor: F) -> AudioCallback
 where
-    F : FnMut(&[f64], &[f64], &mut [f64], &mut [f64], usize) + Send + 'static,
+    F: FnMut(&[f64], &[f64], &mut [f64], &mut [f64], usize) + Send + 'static,
 {
-    Box::new(move |output, input, frames, _time, _status|
-    {
+    Box::new(move |output, input, frames, _time, _status| {
         // Deinterleave input
         let mut left_in = vec![0.0; frames];
         let mut right_in = vec![0.0; frames];
-        for i in 0..frames
-        {
-            if input.len() >= (i + 1) * 2
-            {
+        for i in 0..frames {
+            if input.len() >= (i + 1) * 2 {
                 left_in[i] = input[i * 2];
                 right_in[i] = input[i * 2 + 1];
             }
@@ -1048,10 +758,8 @@ where
         processor(&left_in, &right_in, &mut left_out, &mut right_out, frames);
 
         // Interleave output
-        for i in 0..frames
-        {
-            if output.len() >= (i + 1) * 2
-            {
+        for i in 0..frames {
+            if output.len() >= (i + 1) * 2 {
                 output[i * 2] = left_out[i];
                 output[i * 2 + 1] = right_out[i];
             }
@@ -1059,4 +767,27 @@ where
 
         0
     })
+}
+
+/// Shared helper: wrap a `Mutex<Option<AudioCallback>>` invocation, used by
+/// every platform backend's real-time thread/proc to run the user callback
+/// and interpret its return code consistently.
+pub(crate) fn invoke_callback(
+    callback: &Arc<Mutex<Option<AudioCallback>>>,
+    running: &Arc<AtomicBool>,
+    output: &mut [f64],
+    input: &[f64],
+    frames: usize,
+    stream_time: f64,
+    status: StreamStatus,
+) {
+    let mut guard = callback.lock().unwrap();
+    if let Some(cb) = guard.as_mut() {
+        let result = cb(output, input, frames, stream_time, status);
+        if result != 0 {
+            running.store(false, Ordering::SeqCst);
+        }
+    } else {
+        output.fill(0.0);
+    }
 }

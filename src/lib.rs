@@ -8,10 +8,14 @@
 //! - **Thread-safe buffers** - Concurrent access with `RwLock`-based locking
 //! - **Analog modeling** - Asymmetric saturation for tube/tape-style harmonics
 //! - **Circuit simulation** - Real-time MNA solver for reactive circuits
-//! - **DSP primitives** - Convolution, compression, limiting, and delay
-//! - **Audio file I/O** - WAV and AIFF format support with Buffer integration
-//! - **Plugin system** - MKAU format for modular processing chains
-//! - **Real-time streaming** - RTAudio-style API for audio I/O (optional `realtime` feature)
+//! - **DSP primitives** - Convolution, compression, limiting, and delay, with
+//!   pre-allocated scratch buffers so steady-state processing never allocates
+//! - **SIMD** - AVX2+FMA/SSE2 (`x86_64`) or NEON (`aarch64`) hot loops (optional `simd` feature)
+//! - **Time-frequency analysis** - DFT, FFT, DCT, STFT, CWT, CQT, mel spectrograms (see [`tf`])
+//! - **Audio file I/O** - WAV, BWF, and AIFF format support with Buffer integration
+//! - **Plugin hosting** - Load and run MKAP, VST3, and AUv2 (macOS) plugins through one trait (see [`host`])
+//! - **MKAP plugin system** - Native format for building your own modular processing chains
+//! - **Real-time streaming** - RTAudio-style API with real CoreAudio/WASAPI/ALSA backends (optional `realtime` feature)
 //!
 //! ## Quick Start
 //!
@@ -44,8 +48,11 @@
 //!
 //! - [`buffer`] - Thread-safe audio buffers (`Buffer`, `PushBuffer`, `CircularBuffer`)
 //! - [`dsp`] - Digital signal processing components
-//! - [`audiofile`] - WAV/AIFF file loading and saving
-//! - [`processor`] - MKAU plugin format and dynamic loading
+//! - [`simd`] - SIMD-accelerated primitives used by `dsp` and `tf`'s hot loops
+//! - [`tf`] - Time-frequency analysis (DFT, FFT, DCT, STFT, CWT, CQT, mel spectrograms)
+//! - [`audiofile`] - WAV/BWF/AIFF file loading and saving
+//! - [`processor`] - MKAP plugin format and dynamic loading
+//! - [`host`] - Unified plugin hosting for MKAP, VST3 (`vst3` feature), and AUv2 (`au` feature)
 //! - [`realtime`] - Real-time audio streaming I/O (requires `realtime` feature)
 //!
 //! ## Thread Safety
@@ -146,3 +153,22 @@ pub mod audiofile;
 /// Enable with the `realtime` feature flag.
 #[cfg(feature = "realtime")]
 pub mod realtime;
+
+#[cfg(all(target_os = "macos", any(feature = "realtime", feature = "au")))]
+mod macos_util;
+
+/// SIMD-accelerated primitives for hot per-sample DSP loops.
+///
+/// Falls back to scalar loops unless the `simd` feature is enabled.
+pub mod simd;
+
+/// Plugin hosting for MKAP, VST3, and AUv2 formats.
+///
+/// Provides a unified `HostedPlugin` trait and scanning API on top of the
+/// native MKAP loader (always available), VST3 hosting (`vst3` feature),
+/// and AUv2 hosting on macOS (`au` feature).
+pub mod host;
+
+/// Time-frequency analysis: DFT, FFT, DCT, STFT/multi-resolution STFT,
+/// CWT, CQT, and mel spectrograms.
+pub mod tf;
