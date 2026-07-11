@@ -1,7 +1,7 @@
 //! ALSA backend for Linux.
 //!
-//! Uses blocking-mode `snd_pcm` read/write in a dedicated per-stream thread
-//! - the same fundamental mechanism upstream RtAudio's `RtApiAlsa` uses for
+//! Uses blocking-mode `snd_pcm` read/write in a dedicated per-stream thread,
+//! the same fundamental mechanism upstream RtAudio's `RtApiAlsa` uses for
 //! its default (non-mmap) path. Devices are enumerated via ALSA's
 //! `snd_device_name_hint` (through `alsa::device_name::HintIter`), and
 //! since string-keyed ALSA device names have no native integer identity,
@@ -185,12 +185,11 @@ fn audio_thread(
             Ordering::Relaxed,
         );
 
-        if let (Some(io), Some(pcm)) = (&playback_io, &playback) {
-            if let Err(e) = io.writei(&output_buf) {
-                if pcm.try_recover(e, true).is_err() {
-                    break;
-                }
-            }
+        if let (Some(io), Some(pcm)) = (&playback_io, &playback)
+            && let Err(e) = io.writei(&output_buf)
+            && pcm.try_recover(e, true).is_err()
+        {
+            break;
         }
     }
 
@@ -430,11 +429,11 @@ impl Backend for AlsaBackend {
         }
         self.state = StreamState::Stopped;
 
-        if let Some(rx) = self.return_rx.take() {
-            if let Ok((playback, capture)) = rx.recv() {
-                self.playback = playback;
-                self.capture = capture;
-            }
+        if let Some(rx) = self.return_rx.take()
+            && let Ok((playback, capture)) = rx.recv()
+        {
+            self.playback = playback;
+            self.capture = capture;
         }
 
         // Re-prepare so a subsequent `start()` can spawn a fresh thread
