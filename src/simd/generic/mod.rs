@@ -1,25 +1,30 @@
 //! SIMD abstraction layer and fast math functions.
 //!
 //! All numerical computation in this module is written generically over the
-//! [`SimdFloat`] trait. The default [`ScalarFloat`] backend (WIDTH=1) works
-//! everywhere; platform backends are activated via feature flags:
+//! [`crate::simd::generic::SimdFloat`] trait. The default
+//! [`crate::simd::generic::ScalarFloat`] backend (WIDTH=1) works everywhere;
+//! platform backends are activated by [`crate::sim`]'s compile-time-selected
+//! opt-in features, or unconditionally by [`crate::simd`]'s own
+//! runtime-detected `simd` feature (see
+//! [`crate::simd::generic::dispatch::detect_backend`]):
 //!
-//! | Feature       | Type      | WIDTH | Platform  |
-//! |---------------|-----------|-------|-----------|
-//! | (none)        | `ScalarFloat` | 1 | all       |
-//! | `sim-avx2`    | `F32x8`   | 8     | x86_64    |
-//! | `sim-avx512`  | `F32x16`  | 16    | x86_64    |
-//! | `sim-neon`    | `F32x4`   | 4     | aarch64   |
+//! | Feature       | Type       | WIDTH | Platform  |
+//! |---------------|------------|-------|-----------|
+//! | (none)        | `ScalarFloat` | 1  | all       |
+//! | `simd`        | `F32x4Sse` | 4     | x86_64 (baseline floor)|
+//! | `sim-avx2`    | `F32x8`    | 8     | x86_64    |
+//! | `sim-avx512`  | `F32x16`   | 16    | x86_64    |
+//! | `sim-neon`    | `F32x4`    | 4     | aarch64   |
 //!
 //! # Fast Math
 //!
 //! The following functions are provided with < 1e-5 relative error:
 //!
-//! - [`simd_exp`] -- exponential via range reduction + degree-5 polynomial
-//! - [`simd_log`] -- natural log via atanh series expansion
-//! - [`simd_log1pexp`] -- numerically stable softplus
-//! - [`simd_sigmoid`] -- logistic sigmoid without overflow
-//! - [`simd_recip`], [`simd_rsqrt`] -- Newton-refined reciprocal/inverse sqrt
+//! - [`crate::simd::generic::simd_exp`] -- exponential via range reduction + degree-5 polynomial
+//! - [`crate::simd::generic::simd_log`] -- natural log via atanh series expansion
+//! - [`crate::simd::generic::simd_log1pexp`] -- numerically stable softplus
+//! - [`crate::simd::generic::simd_sigmoid`] -- logistic sigmoid without overflow
+//! - [`crate::simd::generic::simd_recip`], [`crate::simd::generic::simd_rsqrt`] -- Newton-refined reciprocal/inverse sqrt
 
 // `exp`'s Cody-Waite range-reduction constants are intentionally given to
 // more decimal digits than `f32` can represent exactly (for readability
@@ -36,7 +41,7 @@ pub mod reciprocal;
 pub mod scalar;
 /// SIMD logistic sigmoid (`simd_sigmoid`).
 pub mod sigmoid;
-/// The [`SimdFloat`] abstraction trait itself.
+/// The [`crate::simd::generic::SimdFloat`] abstraction trait itself.
 pub mod traits;
 
 /// AVX2 `F32x8` backend, `x86_64` only. Compiled whenever either
@@ -46,29 +51,35 @@ pub mod traits;
 #[cfg(all(target_arch = "x86_64", any(feature = "simd", feature = "sim-avx2")))]
 pub mod avx2;
 
-/// AVX-512 `F32x16` backend (`sim-avx512` feature, `x86_64` only).
-#[cfg(all(target_arch = "x86_64", feature = "sim-avx512"))]
+/// AVX-512 `F32x16` backend, `x86_64` only. Compiled whenever either
+/// [`crate::sim`]'s compile-time-selected `sim-avx512` backend or
+/// [`crate::simd`]'s runtime-dispatched `simd` feature needs it, mirroring
+/// [`crate::simd::generic::avx2`]'s dual use.
+#[cfg(all(target_arch = "x86_64", any(feature = "simd", feature = "sim-avx512")))]
 pub mod avx512;
 
 /// ARM NEON `F32x4` backend, `aarch64` only. Compiled whenever either
 /// [`crate::sim`]'s compile-time-selected `sim-neon` backend or
 /// [`crate::simd`]'s runtime-dispatched `simd` feature needs it, mirroring
-/// [`avx2`]'s dual use.
+/// [`crate::simd::generic::avx2`]'s dual use.
 #[cfg(all(target_arch = "aarch64", any(feature = "simd", feature = "sim-neon")))]
 pub mod neon;
 
-/// Baseline SSE2 `F32x4Sse` backend, `x86_64` only - see [`sse2`]'s module
-/// docs for why it needs no opt-in feature of its own.
+/// Baseline SSE2 `F32x4Sse` backend, `x86_64` only - see
+/// [`crate::simd::generic::sse2`]'s module docs for why it needs no opt-in
+/// feature of its own.
 #[cfg(target_arch = "x86_64")]
 pub mod sse2;
 
 /// Width-agnostic `dot`/`mul_elementwise`/`mix_scalar` shared by every
-/// [`SimdFloat`] backend - see [`ops`]'s module docs.
+/// [`crate::simd::generic::SimdFloat`] backend - see
+/// [`crate::simd::generic::ops`]'s module docs.
 pub mod ops;
 
-/// Runtime backend selection ([`dispatch::detect_backend`]).
+/// Runtime backend selection ([`crate::simd::generic::dispatch::detect_backend`]).
 pub mod dispatch;
 
+pub use dispatch::SimdBackend;
 pub use scalar::ScalarFloat;
 pub use traits::SimdFloat;
 
@@ -78,23 +89,36 @@ pub use reciprocal::{simd_recip, simd_rsqrt};
 pub use sigmoid::simd_sigmoid;
 
 /// Select the best available SIMD backend at compile time.
-/// Returns a string identifying the active backend.
+///
+/// This is [`crate::sim`]'s own compile-time choice (which `sim-*` feature
+/// was enabled), distinct from
+/// [`crate::simd::generic::dispatch::detect_backend`]'s runtime CPU check -
+/// see that function's docs for why the two differ. Returns a string
+/// identifying the active backend, from the same vocabulary as
+/// [`SimdBackend::as_str`].
 pub fn active_backend() -> &'static str {
     #[cfg(all(target_arch = "x86_64", feature = "sim-avx512"))]
     {
-        return "avx512";
+        return SimdBackend::Avx512.as_str();
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "sim-avx2"))]
+    // `not(sim-avx512)` keeps this mutually exclusive with the branch above
+    // so `--all-features` (which enables every `sim-*` feature at once)
+    // doesn't produce two unconditional `return`s in a row.
+    #[cfg(all(
+        target_arch = "x86_64",
+        feature = "sim-avx2",
+        not(feature = "sim-avx512")
+    ))]
     {
-        return "avx2";
+        return SimdBackend::Avx2.as_str();
     }
 
     #[cfg(all(target_arch = "aarch64", feature = "sim-neon"))]
     {
-        return "neon";
+        return SimdBackend::Neon.as_str();
     }
 
     #[allow(unreachable_code)]
-    "scalar"
+    SimdBackend::Scalar.as_str()
 }

@@ -2,7 +2,8 @@
 //!
 //! SSE2 is guaranteed present on every `x86_64` target (it's part of the
 //! baseline ABI), so this needs no runtime feature detection and no opt-in
-//! Cargo feature - it's the always-available floor beneath [`super::avx2`].
+//! Cargo feature - it's the always-available floor beneath
+//! [`crate::simd::generic::avx2`].
 
 use core::arch::x86_64::*;
 
