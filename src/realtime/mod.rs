@@ -19,7 +19,7 @@
 //!
 //! # Audio Format
 //!
-//! Audio samples are represented as normalized `f64` values in the range -1.0 to 1.0,
+//! Audio samples are represented as normalized `f32` values in the range -1.0 to 1.0,
 //! consistent with the rest of the library. Format conversion happens automatically
 //! at the hardware interface.
 //!
@@ -166,7 +166,7 @@ impl fmt::Display for Api {
 /// Audio sample format specifier.
 ///
 /// Translated from `RtAudioFormat` flags in the C++ RTAudio library.
-/// Note: This library normalizes all formats to f64 internally.
+/// Note: This library normalizes all formats to f32 internally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SampleFormat {
     /// 8-bit signed integer.
@@ -392,7 +392,7 @@ pub type MKAudioResult<T> = Result<T, MKAudioError>;
 /// # Realtime Safety
 /// This closure runs on the platform's real-time audio thread. Avoid
 /// allocating, blocking locks, or anything else that could stall it.
-pub type AudioCallback = Box<dyn FnMut(&mut [f64], &[f64], usize, f64, StreamStatus) -> i32 + Send>;
+pub type AudioCallback = Box<dyn FnMut(&mut [f32], &[f32], usize, f32, StreamStatus) -> i32 + Send>;
 
 // ==========================================
 // Backend trait - one real implementation per platform
@@ -433,7 +433,7 @@ pub(crate) trait Backend: Send {
     fn stop(&mut self) -> MKAudioResult<()>;
     fn close(&mut self);
     fn is_running(&self) -> bool;
-    fn stream_time(&self) -> f64;
+    fn stream_time(&self) -> f32;
     fn latency_samples(&self) -> usize;
 }
 
@@ -660,7 +660,7 @@ impl Realtime {
     }
 
     /// Get the stream time in seconds.
-    pub fn get_stream_time(&self) -> f64 {
+    pub fn get_stream_time(&self) -> f32 {
         self.backend.stream_time()
     }
 
@@ -693,16 +693,13 @@ impl Drop for Realtime {
 /// * `frames` - Number of frames per channel
 ///
 /// # Returns
-/// Vector of `Buffer<f64>`, one per channel.
-pub fn deinterleave(interleaved: &[f64], channels: usize, frames: usize) -> Vec<Buffer<f64>> {
+/// Vector of `Buffer<f32>`, one per channel.
+pub fn deinterleave(interleaved: &[f32], channels: usize, frames: usize) -> Vec<Buffer<f32>> {
     let mut buffers = Vec::with_capacity(channels);
     for ch in 0..channels {
-        let buffer = Buffer::new(frames);
-        {
-            let mut guard = buffer.write();
-            for frame in 0..frames {
-                guard[frame] = interleaved[frame * channels + ch];
-            }
+        let mut buffer = Buffer::new(frames);
+        for frame in 0..frames {
+            buffer[frame] = interleaved[frame * channels + ch];
         }
         buffers.push(buffer);
     }
@@ -715,12 +712,11 @@ pub fn deinterleave(interleaved: &[f64], channels: usize, frames: usize) -> Vec<
 /// * `buffers` - Vector of channel buffers
 /// * `interleaved` - Output interleaved buffer to fill
 /// * `frames` - Number of frames per channel
-pub fn interleave(buffers: &[Buffer<f64>], interleaved: &mut [f64], frames: usize) {
+pub fn interleave(buffers: &[Buffer<f32>], interleaved: &mut [f32], frames: usize) {
     let channels = buffers.len();
     for (ch, buffer) in buffers.iter().enumerate() {
-        let guard = buffer.read();
         for frame in 0..frames {
-            interleaved[frame * channels + ch] = guard[frame];
+            interleaved[frame * channels + ch] = buffer[frame];
         }
     }
 }
@@ -737,7 +733,7 @@ pub fn interleave(buffers: &[Buffer<f64>], interleaved: &mut [f64], frames: usiz
 /// An `AudioCallback` suitable for use with `Realtime::open_stream()`.
 pub fn stereo_callback<F>(mut processor: F) -> AudioCallback
 where
-    F: FnMut(&[f64], &[f64], &mut [f64], &mut [f64], usize) + Send + 'static,
+    F: FnMut(&[f32], &[f32], &mut [f32], &mut [f32], usize) + Send + 'static,
 {
     Box::new(move |output, input, frames, _time, _status| {
         // Deinterleave input
@@ -775,10 +771,10 @@ where
 pub(crate) fn invoke_callback(
     callback: &Arc<Mutex<Option<AudioCallback>>>,
     running: &Arc<AtomicBool>,
-    output: &mut [f64],
-    input: &[f64],
+    output: &mut [f32],
+    input: &[f32],
     frames: usize,
-    stream_time: f64,
+    stream_time: f32,
     status: StreamStatus,
 ) {
     let mut guard = callback.lock().unwrap();

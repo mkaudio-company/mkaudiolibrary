@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
@@ -164,13 +164,13 @@ fn find_device(
 }
 
 fn make_waveformat(sample_rate: usize, channels: usize) -> WAVEFORMATEXTENSIBLE {
-    let bytes_per_frame = (channels * std::mem::size_of::<f64>()) as u16;
+    let bytes_per_frame = (channels * std::mem::size_of::<f32>()) as u16;
     WAVEFORMATEXTENSIBLE {
         Format: WAVEFORMATEX {
             wFormatTag: 0xFFFE, // WAVE_FORMAT_EXTENSIBLE
             nChannels: channels as u16,
             nSamplesPerSec: sample_rate as u32,
-            nAvgBytesPerSec: (sample_rate * channels * std::mem::size_of::<f64>()) as u32,
+            nAvgBytesPerSec: (sample_rate * channels * std::mem::size_of::<f32>()) as u32,
             nBlockAlign: bytes_per_frame,
             wBitsPerSample: 64,
             cbSize: 22,
@@ -299,7 +299,7 @@ fn audio_thread(
     setup: ThreadSetup,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     cmd_rx: Receiver<ThreadCommand>,
     setup_tx: Sender<MKAudioResult<usize>>,
 ) {
@@ -388,7 +388,7 @@ fn audio_thread(
     running.store(true, Ordering::SeqCst);
 
     let input_channels = capture.as_ref().map(|c| c.channels).unwrap_or(0);
-    let mut input_ring: Vec<f64> = Vec::new();
+    let mut input_ring: Vec<f32> = Vec::new();
 
     'main: loop {
         loop {
@@ -453,7 +453,7 @@ fn audio_thread(
                     if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
                         input_ring.extend(std::iter::repeat_n(0.0, count));
                     } else {
-                        let src = std::slice::from_raw_parts(data_ptr as *const f64, count);
+                        let src = std::slice::from_raw_parts(data_ptr as *const f32, count);
                         input_ring.extend_from_slice(src);
                     }
 
@@ -476,10 +476,10 @@ fn audio_thread(
                 };
                 let frames = available as usize;
                 let out_slice =
-                    std::slice::from_raw_parts_mut(out_ptr as *mut f64, frames * r.channels);
+                    std::slice::from_raw_parts_mut(out_ptr as *mut f32, frames * r.channels);
 
                 let needed_in = frames * input_channels;
-                let input_slice: Vec<f64> = if input_channels > 0 {
+                let input_slice: Vec<f32> = if input_channels > 0 {
                     if input_ring.len() >= needed_in {
                         input_ring.drain(0..needed_in).collect()
                     } else {
@@ -489,7 +489,7 @@ fn audio_thread(
                     Vec::new()
                 };
 
-                let stream_time = f64::from_bits(stream_time_bits.load(Ordering::Relaxed));
+                let stream_time = f32::from_bits(stream_time_bits.load(Ordering::Relaxed));
                 invoke_callback(
                     &callback,
                     &running,
@@ -500,7 +500,7 @@ fn audio_thread(
                     StreamStatus::default(),
                 );
                 stream_time_bits.store(
-                    (stream_time + frames as f64 / setup.sample_rate as f64).to_bits(),
+                    (stream_time + frames as f32 / setup.sample_rate as f32).to_bits(),
                     Ordering::Relaxed,
                 );
 
@@ -511,8 +511,8 @@ fn audio_thread(
             let chunk_frames = setup.buffer_frames;
             let needed = chunk_frames * input_channels;
             if input_ring.len() >= needed {
-                let chunk: Vec<f64> = input_ring.drain(0..needed).collect();
-                let stream_time = f64::from_bits(stream_time_bits.load(Ordering::Relaxed));
+                let chunk: Vec<f32> = input_ring.drain(0..needed).collect();
+                let stream_time = f32::from_bits(stream_time_bits.load(Ordering::Relaxed));
                 invoke_callback(
                     &callback,
                     &running,
@@ -523,7 +523,7 @@ fn audio_thread(
                     StreamStatus::default(),
                 );
                 stream_time_bits.store(
-                    (stream_time + chunk_frames as f64 / setup.sample_rate as f64).to_bits(),
+                    (stream_time + chunk_frames as f32 / setup.sample_rate as f32).to_bits(),
                     Ordering::Relaxed,
                 );
             } else {
@@ -561,7 +561,7 @@ pub(crate) struct WasapiBackend {
     handle: Option<StreamHandle>,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     buffer_frames: usize,
     number_of_buffers: usize,
 }
@@ -573,7 +573,7 @@ impl WasapiBackend {
             handle: None,
             callback: Arc::new(Mutex::new(None)),
             running: Arc::new(AtomicBool::new(false)),
-            stream_time_bits: Arc::new(AtomicU64::new(0)),
+            stream_time_bits: Arc::new(AtomicU32::new(0)),
             buffer_frames: 256,
             number_of_buffers: 2,
         }
@@ -727,7 +727,7 @@ impl Backend for WasapiBackend {
         self.number_of_buffers = options.number_of_buffers.max(2);
         self.state = StreamState::Stopped;
         self.stream_time_bits
-            .store(0.0f64.to_bits(), Ordering::SeqCst);
+            .store(0.0f32.to_bits(), Ordering::SeqCst);
 
         Ok(actual_frames)
     }
@@ -779,8 +779,8 @@ impl Backend for WasapiBackend {
         self.state == StreamState::Running
     }
 
-    fn stream_time(&self) -> f64 {
-        f64::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
+    fn stream_time(&self) -> f32 {
+        f32::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
     }
 
     fn latency_samples(&self) -> usize {

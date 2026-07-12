@@ -12,7 +12,7 @@ use std::ffi::CString;
 use std::hash::{Hash, Hasher};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use alsa::device_name::HintIter;
@@ -153,7 +153,7 @@ fn audio_thread(
     config: AudioThreadConfig,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     return_tx: std::sync::mpsc::Sender<(Option<PCM>, Option<PCM>)>,
 ) {
     let AudioThreadConfig {
@@ -167,11 +167,11 @@ fn audio_thread(
         let _ = c.start();
     }
 
-    let capture_io = capture.as_ref().and_then(|p| p.io_f64().ok());
-    let playback_io = playback.as_ref().and_then(|p| p.io_f64().ok());
+    let capture_io = capture.as_ref().and_then(|p| p.io_f32().ok());
+    let playback_io = playback.as_ref().and_then(|p| p.io_f32().ok());
 
-    let mut input_buf = vec![0.0f64; period_frames * capture_channels];
-    let mut output_buf = vec![0.0f64; period_frames * playback_channels];
+    let mut input_buf = vec![0.0f32; period_frames * capture_channels];
+    let mut output_buf = vec![0.0f32; period_frames * playback_channels];
 
     while running.load(Ordering::SeqCst) {
         if let (Some(io), Some(pcm)) = (&capture_io, &capture)
@@ -183,7 +183,7 @@ fn audio_thread(
             continue;
         }
 
-        let stream_time = f64::from_bits(stream_time_bits.load(Ordering::Relaxed));
+        let stream_time = f32::from_bits(stream_time_bits.load(Ordering::Relaxed));
         invoke_callback(
             &callback,
             &running,
@@ -194,7 +194,7 @@ fn audio_thread(
             StreamStatus::default(),
         );
         stream_time_bits.store(
-            (stream_time + period_frames as f64 / sample_rate as f64).to_bits(),
+            (stream_time + period_frames as f32 / sample_rate as f32).to_bits(),
             Ordering::Relaxed,
         );
 
@@ -231,7 +231,7 @@ pub(crate) struct AlsaBackend {
     number_of_buffers: usize,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
     return_rx: Option<std::sync::mpsc::Receiver<(Option<PCM>, Option<PCM>)>>,
 }
@@ -249,7 +249,7 @@ impl AlsaBackend {
             number_of_buffers: 4,
             callback: Arc::new(Mutex::new(None)),
             running: Arc::new(AtomicBool::new(false)),
-            stream_time_bits: Arc::new(AtomicU64::new(0)),
+            stream_time_bits: Arc::new(AtomicU32::new(0)),
             thread_handle: None,
             return_rx: None,
         }
@@ -373,7 +373,7 @@ impl Backend for AlsaBackend {
         self.number_of_buffers = options.number_of_buffers.max(4);
         self.state = StreamState::Stopped;
         self.stream_time_bits
-            .store(0.0f64.to_bits(), Ordering::SeqCst);
+            .store(0.0f32.to_bits(), Ordering::SeqCst);
         *self.callback.lock().unwrap() = Some(callback);
 
         Ok(actual_frames)
@@ -483,8 +483,8 @@ impl Backend for AlsaBackend {
         self.state == StreamState::Running
     }
 
-    fn stream_time(&self) -> f64 {
-        f64::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
+    fn stream_time(&self) -> f32 {
+        f32::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
     }
 
     fn latency_samples(&self) -> usize {

@@ -50,15 +50,11 @@ impl HostedPlugin for MkapHosted {
     fn vendor(&self) -> String {
         String::new()
     }
-    // The `Processor` trait doesn't carry an intrinsic channel count (the
-    // host chooses the `AudioIO` layout it passes to `run`), so this
-    // reports the common stereo default rather than a value read from the
-    // plugin itself.
     fn num_inputs(&self) -> usize {
-        2
+        self.inner.num_inputs()
     }
     fn num_outputs(&self) -> usize {
-        2
+        self.inner.num_outputs()
     }
     fn num_parameters(&self) -> usize {
         self.inner.num_parameters()
@@ -66,10 +62,10 @@ impl HostedPlugin for MkapHosted {
     fn parameter_name(&self, index: usize) -> String {
         self.inner.get_parameter_name(index)
     }
-    fn get_parameter(&self, index: usize) -> f64 {
+    fn get_parameter(&self, index: usize) -> f32 {
         self.inner.get_parameter(index)
     }
-    fn set_parameter(&mut self, index: usize, value: f64) {
+    fn set_parameter(&mut self, index: usize, value: f32) {
         self.inner.set_parameter(index, value);
     }
 
@@ -83,7 +79,7 @@ impl HostedPlugin for MkapHosted {
         Ok(())
     }
 
-    fn process(&mut self, audio: &mut AudioIO) {
+    fn process(&mut self, audio: &mut AudioIO<'_>) {
         self.inner.run(audio);
     }
 }

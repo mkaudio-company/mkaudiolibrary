@@ -2,7 +2,7 @@
 //!
 //! This module provides functionality to read and write audio files in WAV, BWF
 //! (Broadcast Wave Format), and AIFF formats. All audio data is stored internally
-//! as normalized `f64` samples in the range -1.0 to 1.0.
+//! as normalized `f32` samples in the range -1.0 to 1.0.
 //!
 //! # Supported Formats
 //!
@@ -21,7 +21,7 @@
 //! # Sample Representation
 //!
 //! Regardless of the source file's bit depth, samples are stored internally as
-//! normalized `f64` values:
+//! normalized `f32` values:
 //! - Full scale positive: +1.0
 //! - Full scale negative: -1.0
 //! - Silence: 0.0
@@ -45,7 +45,7 @@
 //! let mut buffers = audio.to_buffers();
 //!
 //! // Process with DSP (e.g., compression)
-//! let mut compressor = Compression::new(audio.sample_rate() as f64);
+//! let mut compressor = Compression::new(audio.sample_rate() as f32);
 //! // ... apply processing ...
 //!
 //! // Copy processed data back
@@ -84,8 +84,8 @@
 //!
 //! // Generate a 440Hz sine wave on left channel
 //! for i in 0..44100 {
-//!     let t = i as f64 / 44100.0;
-//!     let sample = (2.0 * std::f64::consts::PI * 440.0 * t).sin();
+//!     let t = i as f32 / 44100.0;
+//!     let sample = (2.0 * std::f32::consts::PI * 440.0 * t).sin();
 //!     audio.set_sample(0, i, sample);
 //! }
 //!
@@ -102,7 +102,7 @@
 //!
 //! // Read-only access to channel data
 //! if let Some(left) = audio.channel(0) {
-//!     let peak = left.iter().fold(0.0_f64, |max, &s| max.max(s.abs()));
+//!     let peak = left.iter().fold(0.0_f32, |max, &s| max.max(s.abs()));
 //!     println!("Peak level: {:.4}", peak);
 //! }
 //!
@@ -400,7 +400,7 @@ impl Marker {
 #[derive(Clone, Debug)]
 pub struct TempoInfo {
     /// Tempo in beats per minute.
-    pub bpm: f64,
+    pub bpm: f32,
     /// Time signature numerator (e.g., 4 for 4/4).
     pub time_sig_numerator: u8,
     /// Time signature denominator (e.g., 4 for 4/4).
@@ -422,7 +422,7 @@ impl Default for TempoInfo {
 
 impl TempoInfo {
     /// Create tempo info with the specified BPM at position 0.
-    pub fn new(bpm: f64) -> Self {
+    pub fn new(bpm: f32) -> Self {
         Self {
             bpm,
             ..Default::default()
@@ -430,7 +430,7 @@ impl TempoInfo {
     }
 
     /// Create tempo info with BPM at a specific sample position.
-    pub fn at_position(bpm: f64, position: u64) -> Self {
+    pub fn at_position(bpm: f32, position: u64) -> Self {
         Self {
             bpm,
             position,
@@ -439,7 +439,7 @@ impl TempoInfo {
     }
 
     /// Create tempo info with BPM and time signature at position 0.
-    pub fn with_time_signature(bpm: f64, numerator: u8, denominator: u8) -> Self {
+    pub fn with_time_signature(bpm: f32, numerator: u8, denominator: u8) -> Self {
         Self {
             bpm,
             time_sig_numerator: numerator,
@@ -449,7 +449,7 @@ impl TempoInfo {
     }
 
     /// Create tempo info with BPM, time signature, and position.
-    pub fn with_time_signature_at(bpm: f64, numerator: u8, denominator: u8, position: u64) -> Self {
+    pub fn with_time_signature_at(bpm: f32, numerator: u8, denominator: u8, position: u64) -> Self {
         Self {
             bpm,
             time_sig_numerator: numerator,
@@ -464,7 +464,7 @@ use crate::buffer::Buffer;
 /// Audio file container for loading, manipulating, and saving audio data.
 ///
 /// `AudioFile` provides a unified interface for working with WAV and AIFF audio files.
-/// Audio data is stored as normalized `f64` samples regardless of the source file's
+/// Audio data is stored as normalized `f32` samples regardless of the source file's
 /// bit depth, enabling consistent processing across different formats.
 ///
 /// # Structure
@@ -475,7 +475,7 @@ use crate::buffer::Buffer;
 /// # Thread Safety
 ///
 /// `AudioFile` itself is not thread-safe. For concurrent processing, convert channels
-/// to thread-safe `Buffer<f64>` using [`to_buffer`] or [`to_buffers`], process in
+/// to thread-safe `Buffer<f32>` using [`to_buffer`] or [`to_buffers`], process in
 /// parallel, then copy results back with [`from_buffer`] or [`from_buffers`].
 ///
 /// # iXML Metadata
@@ -488,7 +488,7 @@ use crate::buffer::Buffer;
 /// [`from_buffer`]: AudioFile::from_buffer
 /// [`from_buffers`]: AudioFile::from_buffers
 pub struct AudioFile {
-    audio_buffer: Vec<Vec<f64>>,
+    audio_buffer: Vec<Vec<f32>>,
     /// iXML metadata chunk from the audio file.
     /// Empty string if no iXML chunk is present.
     pub xml_chunk: String,
@@ -581,8 +581,8 @@ impl AudioFile {
     /// * `index` - Channel index (0 = left, 1 = right for stereo)
     ///
     /// # Returns
-    /// `Some(&[f64])` if the channel exists, `None` otherwise.
-    pub fn channel(&self, index: usize) -> Option<&[f64]> {
+    /// `Some(&[f32])` if the channel exists, `None` otherwise.
+    pub fn channel(&self, index: usize) -> Option<&[f32]> {
         self.audio_buffer.get(index).map(|v| v.as_slice())
     }
 
@@ -594,8 +594,8 @@ impl AudioFile {
     /// * `index` - Channel index (0 = left, 1 = right for stereo)
     ///
     /// # Returns
-    /// `Some(&mut [f64])` if the channel exists, `None` otherwise.
-    pub fn channel_mut(&mut self, index: usize) -> Option<&mut [f64]> {
+    /// `Some(&mut [f32])` if the channel exists, `None` otherwise.
+    pub fn channel_mut(&mut self, index: usize) -> Option<&mut [f32]> {
         self.audio_buffer.get_mut(index).map(|v| v.as_mut_slice())
     }
 
@@ -606,8 +606,8 @@ impl AudioFile {
     /// * `sample` - Sample index within the channel
     ///
     /// # Returns
-    /// `Some(f64)` if the indices are valid, `None` otherwise.
-    pub fn get_sample(&self, channel: usize, sample: usize) -> Option<f64> {
+    /// `Some(f32)` if the indices are valid, `None` otherwise.
+    pub fn get_sample(&self, channel: usize, sample: usize) -> Option<f32> {
         self.audio_buffer
             .get(channel)
             .and_then(|c| c.get(sample).copied())
@@ -621,7 +621,7 @@ impl AudioFile {
     /// * `channel` - Channel index
     /// * `sample` - Sample index within the channel
     /// * `value` - Sample value (typically in range -1.0 to 1.0)
-    pub fn set_sample(&mut self, channel: usize, sample: usize, value: f64) {
+    pub fn set_sample(&mut self, channel: usize, sample: usize, value: f32) {
         if let Some(ch) = self.audio_buffer.get_mut(channel)
             && let Some(s) = ch.get_mut(sample)
         {
@@ -638,8 +638,8 @@ impl AudioFile {
     /// * `channel` - Channel index to convert
     ///
     /// # Returns
-    /// `Some(Buffer<f64>)` if the channel exists, `None` otherwise.
-    pub fn to_buffer(&self, channel: usize) -> Option<Buffer<f64>> {
+    /// `Some(Buffer<f32>)` if the channel exists, `None` otherwise.
+    pub fn to_buffer(&self, channel: usize) -> Option<Buffer<f32>> {
         self.audio_buffer
             .get(channel)
             .map(|c| Buffer::from_slice(c))
@@ -653,11 +653,10 @@ impl AudioFile {
     /// # Arguments
     /// * `channel` - Channel index to copy to
     /// * `buffer` - Source buffer containing processed samples
-    pub fn from_buffer(&mut self, channel: usize, buffer: &Buffer<f64>) {
+    pub fn from_buffer(&mut self, channel: usize, buffer: &[f32]) {
         if let Some(ch) = self.audio_buffer.get_mut(channel) {
-            let guard = buffer.read();
-            let len = ch.len().min(guard.len());
-            ch[..len].copy_from_slice(&guard[..len]);
+            let len = ch.len().min(buffer.len());
+            ch[..len].copy_from_slice(&buffer[..len]);
         }
     }
 
@@ -667,8 +666,8 @@ impl AudioFile {
     /// is independent and can be processed in a separate thread.
     ///
     /// # Returns
-    /// A vector of `Buffer<f64>`, one per channel.
-    pub fn to_buffers(&self) -> Vec<Buffer<f64>> {
+    /// A vector of `Buffer<f32>`, one per channel.
+    pub fn to_buffers(&self) -> Vec<Buffer<f32>> {
         self.audio_buffer
             .iter()
             .map(|c| Buffer::from_slice(c))
@@ -682,11 +681,10 @@ impl AudioFile {
     ///
     /// # Arguments
     /// * `buffers` - Slice of buffers containing processed samples
-    pub fn from_buffers(&mut self, buffers: &[Buffer<f64>]) {
+    pub fn from_buffers(&mut self, buffers: &[&[f32]]) {
         for (channel, buffer) in self.audio_buffer.iter_mut().zip(buffers.iter()) {
-            let guard = buffer.read();
-            let len = channel.len().min(guard.len());
-            channel[..len].copy_from_slice(&guard[..len]);
+            let len = channel.len().min(buffer.len());
+            channel[..len].copy_from_slice(&buffer[..len]);
         }
     }
 
@@ -725,8 +723,8 @@ impl AudioFile {
     }
 
     /// Get the duration of the audio file in seconds.
-    pub fn length(&self) -> f64 {
-        self.num_sample() as f64 / self.sample_rate as f64
+    pub fn length(&self) -> f32 {
+        self.num_sample() as f32 / self.sample_rate as f32
     }
 
     /// Get the file format of the loaded audio file.
@@ -881,7 +879,7 @@ impl AudioFile {
     ///
     /// # Arguments
     /// * `bpm` - Beats per minute
-    pub fn set_tempo(&mut self, bpm: f64) {
+    pub fn set_tempo(&mut self, bpm: f32) {
         self.tempo = Some(TempoInfo::new(bpm));
     }
 
@@ -890,7 +888,7 @@ impl AudioFile {
     /// # Arguments
     /// * `bpm` - Beats per minute
     /// * `position` - Sample position where this tempo starts
-    pub fn set_tempo_at(&mut self, bpm: f64, position: u64) {
+    pub fn set_tempo_at(&mut self, bpm: f32, position: u64) {
         self.tempo = Some(TempoInfo::at_position(bpm, position));
     }
 
@@ -900,7 +898,7 @@ impl AudioFile {
     /// * `bpm` - Beats per minute
     /// * `numerator` - Time signature numerator
     /// * `denominator` - Time signature denominator
-    pub fn set_tempo_with_time_sig(&mut self, bpm: f64, numerator: u8, denominator: u8) {
+    pub fn set_tempo_with_time_sig(&mut self, bpm: f32, numerator: u8, denominator: u8) {
         self.tempo = Some(TempoInfo::with_time_signature(bpm, numerator, denominator));
     }
 
@@ -913,7 +911,7 @@ impl AudioFile {
     /// * `position` - Sample position where this tempo starts
     pub fn set_tempo_with_time_sig_at(
         &mut self,
-        bpm: f64,
+        bpm: f32,
         numerator: u8,
         denominator: u8,
         position: u64,
@@ -978,11 +976,11 @@ impl AudioFile {
             get_u16(buffer, index_of_format_chunk + 20, Endianness::Little) as usize;
         self.bit_depth = get_u16(buffer, index_of_format_chunk + 22, Endianness::Little) as usize;
 
-        if self.bit_depth > size_of::<f64>() * 8 {
+        if self.bit_depth > size_of::<f32>() * 8 {
             eprintln!(
                 "ERROR: you are trying to read a {}-bit file using a {}-bit sample type",
                 self.bit_depth,
-                size_of::<f64>() * 8
+                size_of::<f32>() * 8
             );
             return;
         }
@@ -1038,10 +1036,10 @@ impl AudioFile {
 
                 if self.bit_depth == 8 {
                     self.audio_buffer[channel]
-                        .push(buffer[sample_index].cast_signed() as f64 / i8::MAX as f64);
+                        .push(buffer[sample_index].cast_signed() as f32 / i8::MAX as f32);
                 } else if self.bit_depth == 16 {
                     let sample = get_u16(buffer, sample_index, Endianness::Little).cast_signed();
-                    let sample = sample as f64 / i16::MAX as f64;
+                    let sample = sample as f32 / i16::MAX as f32;
                     self.audio_buffer[channel].push(sample);
                 } else if self.bit_depth == 24 {
                     let mut sample = (((buffer[sample_index + 2] as u32) << 16)
@@ -1051,14 +1049,14 @@ impl AudioFile {
                     if sample & 0x800000 == 0 {
                         sample |= !0xFFFFFF
                     };
-                    self.audio_buffer[channel].push(sample as f64 / 8388607.0);
+                    self.audio_buffer[channel].push(sample as f32 / 8388607.0);
                 } else if self.bit_depth == 32 {
                     let sample = get_u32(buffer, sample_index, Endianness::Little);
                     if audio_format.unwrap() == WavAudioFormat::IEEEFloat {
-                        self.audio_buffer[channel].push(f32::from_bits(sample) as f64);
+                        self.audio_buffer[channel].push(f32::from_bits(sample));
                     } else {
                         self.audio_buffer[channel]
-                            .push(sample.cast_signed() as f64 / i32::MAX as f64);
+                            .push(sample.cast_signed() as f32 / i32::MAX as f32);
                     }
                 } else {
                     eprintln!("ERROR: Wrong bit depth detected.");
@@ -1141,11 +1139,11 @@ impl AudioFile {
         self.bit_depth = get_u16(buffer, index_of_comm_chunk + 14, Endianness::Big) as usize;
         self.sample_rate = get_aiff_sample_rate(buffer, index_of_comm_chunk + 16);
 
-        if self.bit_depth > size_of::<f64>() * 8 {
+        if self.bit_depth > size_of::<f32>() * 8 {
             eprintln!(
                 "ERROR: you are trying to read a {}-bit file using a {}-bit sample type",
                 self.bit_depth,
-                size_of::<f64>() * 8
+                size_of::<f32>() * 8
             );
             return;
         }
@@ -1203,10 +1201,10 @@ impl AudioFile {
 
                 if self.bit_depth == 8 {
                     self.audio_buffer[channel]
-                        .push(buffer[sample_index].cast_signed() as f64 / i8::MAX as f64);
+                        .push(buffer[sample_index].cast_signed() as f32 / i8::MAX as f32);
                 } else if self.bit_depth == 16 {
                     self.audio_buffer[channel].push(
-                        get_u16(buffer, sample_index, Endianness::Big) as f64 / u16::MAX as f64,
+                        get_u16(buffer, sample_index, Endianness::Big) as f32 / u16::MAX as f32,
                     );
                 } else if self.bit_depth == 24 {
                     let mut sample = ((buffer[sample_index] as i32) << 16)
@@ -1216,15 +1214,15 @@ impl AudioFile {
                     if sample & 0x800000 == 0 {
                         sample |= !0xFFFFFF;
                     }
-                    self.audio_buffer[channel].push(sample as f64 / 8388607.0);
+                    self.audio_buffer[channel].push(sample as f32 / 8388607.0);
                 } else if self.bit_depth == 32 {
                     let sample = get_u32(buffer, sample_index, Endianness::Big);
 
                     if audio_format == AIFFAudioFormat::Compressed {
-                        self.audio_buffer[channel].push(f32::from_bits(sample) as f64);
+                        self.audio_buffer[channel].push(f32::from_bits(sample));
                     } else {
                         self.audio_buffer[channel]
-                            .push(sample.cast_signed() as f64 / i32::MAX as f64)
+                            .push(sample.cast_signed() as f32 / i32::MAX as f32)
                     }
                 } else {
                     eprintln!("ERROR: Wrong bit depth detected.");
@@ -1355,11 +1353,11 @@ impl AudioFile {
             for channel in 0..self.num_channel() {
                 let sample = self.audio_buffer[channel][index].clamp(-1.0, 1.0);
                 if self.bit_depth == 8 {
-                    buffer.push(((sample * i8::MAX as f64) as i8).cast_unsigned());
+                    buffer.push(((sample * i8::MAX as f32) as i8).cast_unsigned());
                 } else if self.bit_depth == 16 {
                     set_u16(
                         &mut buffer,
-                        ((sample * i16::MAX as f64) as i16).cast_unsigned(),
+                        ((sample * i16::MAX as f32) as i16).cast_unsigned(),
                         Endianness::Little,
                     );
                 } else if self.bit_depth == 24 {
@@ -1374,7 +1372,7 @@ impl AudioFile {
                 } else if self.bit_depth == 32 {
                     set_u32(
                         &mut buffer,
-                        ((sample * i32::MAX as f64) as i32).cast_unsigned(),
+                        ((sample * i32::MAX as f32) as i32).cast_unsigned(),
                         Endianness::Little,
                     );
                 } else {
@@ -1435,11 +1433,11 @@ impl AudioFile {
             for channel in 0..self.num_channel() {
                 let sample = self.audio_buffer[channel][index].clamp(-1.0, 1.0);
                 if self.bit_depth == 8 {
-                    buffer.push(((sample * i8::MAX as f64) as i8).cast_unsigned());
+                    buffer.push(((sample * i8::MAX as f32) as i8).cast_unsigned());
                 } else if self.bit_depth == 16 {
                     set_u16(
                         &mut buffer,
-                        ((sample * i16::MAX as f64) as i16).cast_unsigned(),
+                        ((sample * i16::MAX as f32) as i16).cast_unsigned(),
                         Endianness::Big,
                     );
                 } else if self.bit_depth == 24 {
@@ -1454,7 +1452,7 @@ impl AudioFile {
                 } else if self.bit_depth == 32 {
                     set_u32(
                         &mut buffer,
-                        ((sample * i32::MAX as f64) as i32).cast_unsigned(),
+                        ((sample * i32::MAX as f32) as i32).cast_unsigned(),
                         Endianness::Big,
                     );
                 } else {
@@ -1856,7 +1854,7 @@ fn read_acid_chunk(buffer: &[u8], index: usize) -> Option<TempoInfo> {
     }
 
     let tempo_bits = get_u32(buffer, data_start + 20, Endianness::Little);
-    let tempo = f32::from_bits(tempo_bits) as f64;
+    let tempo = f32::from_bits(tempo_bits);
 
     if tempo > 0.0 && tempo < 1000.0 {
         let numerator = get_u16(buffer, data_start + 18, Endianness::Little) as u8;
@@ -2014,7 +2012,7 @@ fn write_acid_chunk(
     set_u32(buffer, 0, Endianness::Little);
 
     // Number of beats (4 bytes)
-    let duration_seconds = num_samples as f64 / sample_rate as f64;
+    let duration_seconds = num_samples as f32 / sample_rate as f32;
     let num_beats = (duration_seconds * tempo.bpm / 60.0) as u32;
     set_u32(buffer, num_beats, Endianness::Little);
 
@@ -2027,5 +2025,5 @@ fn write_acid_chunk(
     set_u16(buffer, tempo.time_sig_numerator as u16, Endianness::Little);
 
     // Tempo as float (4 bytes)
-    set_u32(buffer, (tempo.bpm as f32).to_bits(), Endianness::Little);
+    set_u32(buffer, tempo.bpm.to_bits(), Endianness::Little);
 }

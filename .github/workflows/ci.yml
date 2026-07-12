@@ -11,16 +11,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # au (AUv2 hosting) is macOS-only; gui pulls mkgraphic, verified
-          # here on macOS only (its Windows/Linux windowing support isn't
-          # established, so it's left out of the blocking matrix below -
-          # see the separate non-blocking probe step for Linux/Windows).
+          # au (AUv2 hosting) is macOS-only. gui (mkapk-core/mkapk-host) is
+          # pure Rust with no platform-specific windowing dependencies, so
+          # it's safe in the blocking matrix on every OS - unlike the old
+          # mkgraphic-backed gui feature, which needed a separate
+          # non-blocking Linux/Windows probe job.
+          # sim-neon/sim-avx2 are added per-arch: GitHub's macos-latest
+          # runners are Apple Silicon (aarch64/NEON); windows-latest and
+          # ubuntu-latest are x86_64 (AVX2).
           - os: macos-latest
-            features: realtime,simd,vst3,au,midi,gui
+            features: realtime,simd,vst3,au,midi,gui,sim,sim-neon
           - os: windows-latest
-            features: realtime,simd,vst3,midi
+            features: realtime,simd,vst3,midi,gui,sim,sim-avx2
           - os: ubuntu-latest
-            features: realtime,simd,vst3,midi
+            features: realtime,simd,vst3,midi,gui,sim,sim-avx2
 
     steps:
       - name: Checkout repository
@@ -54,29 +58,3 @@ jobs:
 
       - name: Build examples
         run: cargo build --examples --features "${{ matrix.features }}"
-
-  # Non-blocking probe: mkgraphic's Windows/Linux windowing support isn't
-  # confirmed, so `gui` isn't in the blocking matrix above for those OSes.
-  # This surfaces a build failure without turning the required checks red.
-  gui-feature-probe:
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
-
-      - name: Build with gui feature
-        run: cargo build --features gui

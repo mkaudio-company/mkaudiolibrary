@@ -1,6 +1,6 @@
 //! Continuous Wavelet Transform (complex Morlet wavelet).
 
-use std::f64::consts::PI;
+use std::f32::consts::PI;
 
 use super::complex::Complex64;
 
@@ -22,7 +22,7 @@ use super::complex::Complex64;
 ///
 /// # Returns
 /// One row per scale, each the same length as `signal`.
-pub fn cwt(signal: &[f64], scales: &[f64], w0: f64, sample_rate: f64) -> Vec<Vec<Complex64>> {
+pub fn cwt(signal: &[f32], scales: &[f32], w0: f32, sample_rate: f32) -> Vec<Vec<Complex64>> {
     let n = signal.len();
 
     scales
@@ -36,7 +36,7 @@ pub fn cwt(signal: &[f64], scales: &[f64], w0: f64, sample_rate: f64) -> Vec<Vec
             let mut kernel_re = Vec::with_capacity(kernel_len);
             let mut kernel_im = Vec::with_capacity(kernel_len);
             for k in -half_width..=half_width {
-                let t = k as f64 / sample_rate / scale;
+                let t = k as f32 / sample_rate / scale;
                 let envelope = norm * (-t * t / 2.0).exp();
                 let c = Complex64::from_polar(envelope, w0 * t);
                 kernel_re.push(c.re);
@@ -72,17 +72,17 @@ pub fn cwt(signal: &[f64], scales: &[f64], w0: f64, sample_rate: f64) -> Vec<Vec
 /// (converted via the Morlet wavelet's approximate center-frequency
 /// relationship `f_c = w0 / (2*pi*scale)`), `voices_per_octave` scales per
 /// octave - the usual way to lay out a CWT's scale axis for visualization.
-pub fn log_scales(min_freq: f64, max_freq: f64, voices_per_octave: usize, w0: f64) -> Vec<f64> {
+pub fn log_scales(min_freq: f32, max_freq: f32, voices_per_octave: usize, w0: f32) -> Vec<f32> {
     if min_freq <= 0.0 || max_freq <= min_freq || voices_per_octave == 0 {
         return Vec::new();
     }
 
     let octaves = (max_freq / min_freq).log2();
-    let num_scales = (octaves * voices_per_octave as f64).ceil() as usize;
+    let num_scales = (octaves * voices_per_octave as f32).ceil() as usize;
 
     (0..=num_scales)
         .map(|i| {
-            let freq = min_freq * 2f64.powf(i as f64 / voices_per_octave as f64);
+            let freq = min_freq * 2f32.powf(i as f32 / voices_per_octave as f32);
             w0 / (2.0 * PI * freq)
         })
         .collect()
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn cwt_output_shape_matches_scales_and_signal_length() {
-        let signal: Vec<f64> = (0..512).map(|i| (i as f64 * 0.1).sin()).collect();
+        let signal: Vec<f32> = (0..512).map(|i| (i as f32 * 0.1).sin()).collect();
         let scales = [0.01, 0.02, 0.04];
         let result = cwt(&signal, &scales, 6.0, 8000.0);
         assert_eq!(result.len(), scales.len());
@@ -110,8 +110,8 @@ mod tests {
         // scale an octave away.
         let sample_rate = 8000.0;
         let tone_freq = 200.0;
-        let signal: Vec<f64> = (0..4000)
-            .map(|i| (2.0 * PI * tone_freq * i as f64 / sample_rate).sin())
+        let signal: Vec<f32> = (0..4000)
+            .map(|i| (2.0 * PI * tone_freq * i as f32 / sample_rate).sin())
             .collect();
 
         let w0 = 6.0;

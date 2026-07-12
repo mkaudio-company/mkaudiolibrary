@@ -4,17 +4,17 @@
 //! dot products (via [`crate::simd::dot`]) - the same approach as
 //! [`crate::tf::fft::dft`].
 
-use std::f64::consts::PI;
+use std::f32::consts::PI;
 
 /// DCT-II. `idct2(dct2(x))` recovers `x` exactly (up to floating point).
-pub fn dct2(input: &[f64]) -> Vec<f64> {
+pub fn dct2(input: &[f32]) -> Vec<f32> {
     let n = input.len();
     let mut output = vec![0.0; n];
     let mut table = vec![0.0; n];
 
     for (k, out) in output.iter_mut().enumerate() {
         for (t, slot) in table.iter_mut().enumerate() {
-            *slot = (PI / n as f64 * (t as f64 + 0.5) * k as f64).cos();
+            *slot = (PI / n as f32 * (t as f32 + 0.5) * k as f32).cos();
         }
         *out = crate::simd::dot(input, &table);
     }
@@ -26,7 +26,7 @@ pub fn dct2(input: &[f64]) -> Vec<f64> {
 /// (`X[0]/2 + sum_{k>=1} X[k]cos(...)`) is the inverse of unnormalized
 /// DCT-II up to a factor of `N/2` (verified directly for N=2 - the naive
 /// "divide by N" scaling is off by exactly 2x), so this scales by `2/N`.
-pub fn idct2(input: &[f64]) -> Vec<f64> {
+pub fn idct2(input: &[f32]) -> Vec<f32> {
     let n = input.len();
     if n == 0 {
         return Vec::new();
@@ -38,9 +38,9 @@ pub fn idct2(input: &[f64]) -> Vec<f64> {
     for (t, out) in output.iter_mut().enumerate() {
         table[0] = 0.5;
         for (k, slot) in table.iter_mut().enumerate().skip(1) {
-            *slot = (PI / n as f64 * (t as f64 + 0.5) * k as f64).cos();
+            *slot = (PI / n as f32 * (t as f32 + 0.5) * k as f32).cos();
         }
-        *out = crate::simd::dot(input, &table) * 2.0 / n as f64;
+        *out = crate::simd::dot(input, &table) * 2.0 / n as f32;
     }
 
     output
@@ -52,10 +52,10 @@ mod tests {
 
     #[test]
     fn idct2_of_dct2_is_identity() {
-        let input: Vec<f64> = (0..40).map(|i| (i as f64 * 0.21).sin() + 0.3).collect();
+        let input: Vec<f32> = (0..40).map(|i| (i as f32 * 0.21).sin() + 0.3).collect();
         let roundtrip = idct2(&dct2(&input));
         for (a, b) in input.iter().zip(roundtrip.iter()) {
-            assert!((a - b).abs() < 1e-9, "{} vs {}", a, b);
+            assert!((a - b).abs() < 1e-4, "{} vs {}", a, b);
         }
     }
 }

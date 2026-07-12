@@ -5,27 +5,32 @@
 
 use std::ops::{Add, Mul, Sub};
 
-/// A complex number with `f64` components.
+/// A complex number with `f32` components.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Complex64 {
-    pub re: f64,
-    pub im: f64,
+    /// Real part.
+    pub re: f32,
+    /// Imaginary part.
+    pub im: f32,
 }
 
 impl Complex64 {
+    /// Construct from real and imaginary parts.
     #[inline]
-    pub fn new(re: f64, im: f64) -> Self {
+    pub fn new(re: f32, im: f32) -> Self {
         Self { re, im }
     }
 
+    /// Construct from polar form: magnitude `r` and phase `theta` (radians).
     #[inline]
-    pub fn from_polar(r: f64, theta: f64) -> Self {
+    pub fn from_polar(r: f32, theta: f32) -> Self {
         Self {
             re: r * theta.cos(),
             im: r * theta.sin(),
         }
     }
 
+    /// Complex conjugate (`re - i*im`).
     #[inline]
     pub fn conj(self) -> Self {
         Self {
@@ -34,23 +39,28 @@ impl Complex64 {
         }
     }
 
+    /// Magnitude (Euclidean norm) `sqrt(re^2 + im^2)`.
     #[inline]
-    pub fn norm(self) -> f64 {
+    pub fn norm(self) -> f32 {
         self.re.hypot(self.im)
     }
 
+    /// Squared magnitude `re^2 + im^2`, cheaper than [`Complex64::norm`]
+    /// when only relative magnitudes matter.
     #[inline]
-    pub fn norm_sqr(self) -> f64 {
+    pub fn norm_sqr(self) -> f32 {
         self.re * self.re + self.im * self.im
     }
 
+    /// Phase angle in radians, `atan2(im, re)`.
     #[inline]
-    pub fn arg(self) -> f64 {
+    pub fn arg(self) -> f32 {
         self.im.atan2(self.re)
     }
 
+    /// Multiply both components by a real scalar `k`.
     #[inline]
-    pub fn scale(self, k: f64) -> Self {
+    pub fn scale(self, k: f32) -> Self {
         Self {
             re: self.re * k,
             im: self.im * k,
@@ -97,9 +107,9 @@ mod tests {
 
     #[test]
     fn polar_roundtrip() {
-        let c = Complex64::from_polar(2.0, std::f64::consts::FRAC_PI_4);
-        assert!((c.norm() - 2.0).abs() < 1e-12);
-        assert!((c.arg() - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        let c = Complex64::from_polar(2.0, std::f32::consts::FRAC_PI_4);
+        assert!((c.norm() - 2.0).abs() < 1e-6);
+        assert!((c.arg() - std::f32::consts::FRAC_PI_4).abs() < 1e-6);
     }
 
     #[test]
@@ -107,9 +117,6 @@ mod tests {
         let a = Complex64::new(1.0, 2.0);
         let b = Complex64::new(3.0, -1.0);
         let product = a * b;
-        assert_eq!(
-            product,
-            Complex64::new(1.0 * 3.0 - 2.0 * -1.0, 1.0 * -1.0 + 2.0 * 3.0)
-        );
+        assert_eq!(product, Complex64::new(1.0 * 3.0 - -2.0, -1.0 + 2.0 * 3.0));
     }
 }

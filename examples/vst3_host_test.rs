@@ -45,22 +45,28 @@ fn main() {
 
     let in_channels = plugin.num_inputs().max(1);
     let out_channels = plugin.num_outputs().max(1);
-    let mut audio = AudioIO::new(in_channels, out_channels, 0, 0, 512);
 
-    for ch in 0..audio.input.len() {
-        let mut guard = audio.input[ch].write();
-        for (i, sample) in guard.iter_mut().enumerate() {
-            *sample = (i as f64 / 48000.0 * 440.0 * std::f64::consts::TAU).sin() * 0.25;
+    // AudioIO borrows into caller-owned storage rather than allocating its
+    // own - own the actual sample memory here, for the life of this block.
+    let mut input_storage = vec![vec![0.0f32; 512]; in_channels];
+    let mut output_storage = vec![vec![0.0f32; 512]; out_channels];
+
+    for channel in &mut input_storage {
+        for (i, sample) in channel.iter_mut().enumerate() {
+            *sample = (i as f32 / 48000.0 * 440.0 * std::f32::consts::TAU).sin() * 0.25;
         }
     }
 
+    let input: Vec<&[f32]> = input_storage.iter().map(Vec::as_slice).collect();
+    let mut output: Vec<&mut [f32]> = output_storage.iter_mut().map(Vec::as_mut_slice).collect();
+    let mut audio = AudioIO::new(Some(&input), &mut output, None, None);
+
     plugin.process(&mut audio);
 
-    let mut peak = 0.0f64;
+    let mut peak = 0.0f32;
     let mut nonzero = false;
-    for ch in 0..audio.output.len() {
-        let guard = audio.output[ch].read();
-        for &s in guard.iter() {
+    for channel in &output_storage {
+        for &s in channel.iter() {
             if s != 0.0 {
                 nonzero = true;
             }

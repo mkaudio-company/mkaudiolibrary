@@ -6,7 +6,7 @@
 
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use super::{
@@ -23,7 +23,7 @@ pub(crate) struct DummyBackend {
     number_of_buffers: usize,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -38,7 +38,7 @@ impl DummyBackend {
             number_of_buffers: 2,
             callback: Arc::new(Mutex::new(None)),
             running: Arc::new(AtomicBool::new(false)),
-            stream_time_bits: Arc::new(AtomicU64::new(0)),
+            stream_time_bits: Arc::new(AtomicU32::new(0)),
             thread_handle: None,
         }
     }
@@ -112,7 +112,7 @@ impl Backend for DummyBackend {
         self.state = StreamState::Running;
         self.running.store(true, Ordering::SeqCst);
         self.stream_time_bits
-            .store(0.0f64.to_bits(), Ordering::SeqCst);
+            .store(0.0f32.to_bits(), Ordering::SeqCst);
 
         let callback = self.callback.clone();
         let running = self.running.clone();
@@ -124,12 +124,12 @@ impl Backend for DummyBackend {
 
         self.thread_handle = Some(std::thread::spawn(move || {
             let frame_duration =
-                std::time::Duration::from_secs_f64(buffer_frames as f64 / sample_rate as f64);
-            let input = vec![0.0f64; buffer_frames * input_channels];
-            let mut output = vec![0.0f64; buffer_frames * output_channels];
+                std::time::Duration::from_secs_f32(buffer_frames as f32 / sample_rate as f32);
+            let input = vec![0.0f32; buffer_frames * input_channels];
+            let mut output = vec![0.0f32; buffer_frames * output_channels];
 
             while running.load(Ordering::SeqCst) {
-                let stream_time = f64::from_bits(stream_time_bits.load(Ordering::SeqCst));
+                let stream_time = f32::from_bits(stream_time_bits.load(Ordering::SeqCst));
                 invoke_callback(
                     &callback,
                     &running,
@@ -140,7 +140,7 @@ impl Backend for DummyBackend {
                     StreamStatus::default(),
                 );
                 stream_time_bits.store(
-                    (stream_time + buffer_frames as f64 / sample_rate as f64).to_bits(),
+                    (stream_time + buffer_frames as f32 / sample_rate as f32).to_bits(),
                     Ordering::SeqCst,
                 );
                 std::thread::sleep(frame_duration);
@@ -176,8 +176,8 @@ impl Backend for DummyBackend {
         self.state == StreamState::Running
     }
 
-    fn stream_time(&self) -> f64 {
-        f64::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
+    fn stream_time(&self) -> f32 {
+        f32::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
     }
 
     fn latency_samples(&self) -> usize {

@@ -11,7 +11,7 @@
 use std::ffi::c_void;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use coreaudio_sys::*;
@@ -189,7 +189,7 @@ fn default_device(selector: AudioObjectPropertySelector) -> AudioDeviceID {
 }
 
 fn make_asbd(sample_rate: usize, channels: usize) -> AudioStreamBasicDescription {
-    let bytes_per_frame = (channels * std::mem::size_of::<f64>()) as UInt32;
+    let bytes_per_frame = (channels * std::mem::size_of::<f32>()) as UInt32;
     AudioStreamBasicDescription {
         mSampleRate: sample_rate as Float64,
         mFormatID: kAudioFormatLinearPCM,
@@ -211,11 +211,11 @@ struct RenderContext {
     unit: AudioUnit,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     sample_rate: usize,
     input_channels: usize,
     input_enabled: bool,
-    input_scratch: Vec<f64>,
+    input_scratch: Vec<f32>,
 }
 
 unsafe extern "C" fn render_proc(
@@ -240,7 +240,7 @@ unsafe extern "C" fn render_proc(
                 mNumberBuffers: 1,
                 mBuffers: [AudioBuffer {
                     mNumberChannels: ctx.input_channels as UInt32,
-                    mDataByteSize: (needed * std::mem::size_of::<f64>()) as UInt32,
+                    mDataByteSize: (needed * std::mem::size_of::<f32>()) as UInt32,
                     mData: ctx.input_scratch.as_mut_ptr() as *mut c_void,
                 }],
             };
@@ -258,15 +258,15 @@ unsafe extern "C" fn render_proc(
         }
 
         let out_buffer = &mut (*io_data).mBuffers[0];
-        let out_len = (out_buffer.mDataByteSize as usize) / std::mem::size_of::<f64>();
-        let output_slice = std::slice::from_raw_parts_mut(out_buffer.mData as *mut f64, out_len);
-        let input_slice: &[f64] = if ctx.input_enabled {
+        let out_len = (out_buffer.mDataByteSize as usize) / std::mem::size_of::<f32>();
+        let output_slice = std::slice::from_raw_parts_mut(out_buffer.mData as *mut f32, out_len);
+        let input_slice: &[f32] = if ctx.input_enabled {
             &ctx.input_scratch[..frames * ctx.input_channels]
         } else {
             &[]
         };
 
-        let stream_time = f64::from_bits(ctx.stream_time_bits.load(Ordering::Relaxed));
+        let stream_time = f32::from_bits(ctx.stream_time_bits.load(Ordering::Relaxed));
         invoke_callback(
             &ctx.callback,
             &ctx.running,
@@ -277,7 +277,7 @@ unsafe extern "C" fn render_proc(
             StreamStatus::default(),
         );
         ctx.stream_time_bits.store(
-            (stream_time + frames as f64 / ctx.sample_rate as f64).to_bits(),
+            (stream_time + frames as f32 / ctx.sample_rate as f32).to_bits(),
             Ordering::Relaxed,
         );
 
@@ -309,7 +309,7 @@ unsafe extern "C" fn input_only_proc(
             mNumberBuffers: 1,
             mBuffers: [AudioBuffer {
                 mNumberChannels: ctx.input_channels as UInt32,
-                mDataByteSize: (needed * std::mem::size_of::<f64>()) as UInt32,
+                mDataByteSize: (needed * std::mem::size_of::<f32>()) as UInt32,
                 mData: ctx.input_scratch.as_mut_ptr() as *mut c_void,
             }],
         };
@@ -325,7 +325,7 @@ unsafe extern "C" fn input_only_proc(
             return status;
         }
 
-        let stream_time = f64::from_bits(ctx.stream_time_bits.load(Ordering::Relaxed));
+        let stream_time = f32::from_bits(ctx.stream_time_bits.load(Ordering::Relaxed));
         invoke_callback(
             &ctx.callback,
             &ctx.running,
@@ -336,7 +336,7 @@ unsafe extern "C" fn input_only_proc(
             StreamStatus::default(),
         );
         ctx.stream_time_bits.store(
-            (stream_time + frames as f64 / ctx.sample_rate as f64).to_bits(),
+            (stream_time + frames as f32 / ctx.sample_rate as f32).to_bits(),
             Ordering::Relaxed,
         );
 
@@ -350,7 +350,7 @@ pub(crate) struct CoreAudioBackend {
     ctx_ptr: *mut RenderContext,
     callback: Arc<Mutex<Option<AudioCallback>>>,
     running: Arc<AtomicBool>,
-    stream_time_bits: Arc<AtomicU64>,
+    stream_time_bits: Arc<AtomicU32>,
     sample_rate: usize,
     buffer_frames: usize,
     number_of_buffers: usize,
@@ -369,7 +369,7 @@ impl CoreAudioBackend {
             ctx_ptr: std::ptr::null_mut(),
             callback: Arc::new(Mutex::new(None)),
             running: Arc::new(AtomicBool::new(false)),
-            stream_time_bits: Arc::new(AtomicU64::new(0)),
+            stream_time_bits: Arc::new(AtomicU32::new(0)),
             sample_rate: 44100,
             buffer_frames: 256,
             number_of_buffers: 2,
@@ -638,7 +638,7 @@ impl Backend for CoreAudioBackend {
             self.number_of_buffers = options.number_of_buffers.max(2);
             self.state = StreamState::Stopped;
             self.stream_time_bits
-                .store(0.0f64.to_bits(), Ordering::SeqCst);
+                .store(0.0f32.to_bits(), Ordering::SeqCst);
             *self.callback.lock().unwrap() = Some(callback);
 
             Ok(actual_frames)
@@ -700,8 +700,8 @@ impl Backend for CoreAudioBackend {
         self.state == StreamState::Running
     }
 
-    fn stream_time(&self) -> f64 {
-        f64::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
+    fn stream_time(&self) -> f32 {
+        f32::from_bits(self.stream_time_bits.load(Ordering::SeqCst))
     }
 
     fn latency_samples(&self) -> usize {

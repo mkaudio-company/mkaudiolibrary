@@ -22,7 +22,13 @@
 //! plugin.prepare(48000, 512)?;
 //! plugin.set_active(true)?;
 //!
-//! let mut audio = AudioIO::new(2, 2, 0, 0, 512);
+//! // AudioIO borrows into caller-owned storage rather than allocating its
+//! // own - own the actual sample memory for the stream's lifetime.
+//! let mut input_storage = vec![vec![0.0f32; 512]; 2];
+//! let mut output_storage = vec![vec![0.0f32; 512]; 2];
+//! let input: Vec<&[f32]> = input_storage.iter().map(Vec::as_slice).collect();
+//! let mut output: Vec<&mut [f32]> = output_storage.iter_mut().map(Vec::as_mut_slice).collect();
+//! let mut audio = AudioIO::new(&input, &mut output, &[], &mut []);
 //! plugin.process(&mut audio);
 //! # Ok::<(), mkaudiolibrary::host::HostError>(())
 //! ```
@@ -136,16 +142,16 @@ pub trait HostedPlugin: Send {
     /// Display name of a parameter by index.
     fn parameter_name(&self, index: usize) -> String;
     /// Get a parameter's normalized value (0.0 to 1.0).
-    fn get_parameter(&self, index: usize) -> f64;
+    fn get_parameter(&self, index: usize) -> f32;
     /// Set a parameter's normalized value (0.0 to 1.0).
-    fn set_parameter(&mut self, index: usize, value: f64);
+    fn set_parameter(&mut self, index: usize, value: f32);
     /// Configure the plugin for a given sample rate and maximum block size.
     /// Must be called (at least once) before [`process`](Self::process).
     fn prepare(&mut self, sample_rate: usize, block_size: usize) -> HostResult<()>;
     /// Activate or deactivate audio processing.
     fn set_active(&mut self, active: bool) -> HostResult<()>;
     /// Process one block of audio in place.
-    fn process(&mut self, audio: &mut AudioIO);
+    fn process(&mut self, audio: &mut AudioIO<'_>);
 }
 
 /// Scan a directory for MKAP plugins (`.mkap` files).

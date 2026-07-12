@@ -6,19 +6,19 @@
 
 A Rust library for real-time audio signal processing, featuring analog modeling through numeric functions and circuit simulation via Modified Nodal Analysis (MNA).
 
+Every audio-sample-carrying API in this crate operates on plain `f32` - matching VST3/AU/MKAP plugin hosting's native sample format - passed as `&[f32]`/`&mut [f32]` slices or the unlocked `Buffer<f32>` wrapper. None of this crate's own processors share buffers across threads internally, so nothing pays for locking with no reader on the other end; wrap a buffer yourself (`Arc<Mutex<_>>`, a lock-free ring buffer, etc.) if you need to hand it to another thread.
+
 ## Features
 
-- **Thread-safe buffers** with `RwLock`-based concurrent access
-- **Analog modeling** for tube/tape-style saturation with asymmetric parameters
-- **Circuit simulation** with real-time transient analysis using MNA
-- **DSP primitives** including convolution, compression, limiting, and delay, with pre-allocated scratch buffers so steady-state processing never allocates
+- **Analog modeling** - asymmetric log-curve saturation, and (via the `sim` feature) physically-modeled vacuum tube saturation
+- **Circuit simulation** - real-time MNA solver for reactive circuits (`dsp::Circuit`), plus a full tube/diode/transistor + Wave Digital Filter circuit modeling toolkit (`sim` feature, merged in from [libmksim](https://github.com/mkaudio-company/libmksim))
+- **DSP primitives** - convolution, IIR (biquad/Butterworth) and FIR (windowed-sinc) filtering, compression/limiting/gating, delay, integer oversampling, and FFT-based sample-rate conversion, with pre-allocated scratch buffers so steady-state processing never allocates
 - **SIMD acceleration** (optional `simd` feature) for hot per-sample loops: AVX2+FMA/SSE2 on `x86_64`, NEON on `aarch64`, scalar fallback otherwise
 - **Time-frequency analysis** (`tf` module) - DFT, FFT (radix-2 + Bluestein for arbitrary lengths), DCT, STFT/multi-resolution STFT, CWT, CQT, and mel spectrograms
 - **Audio file I/O** for WAV, BWF, and AIFF formats with Buffer integration
 - **Plugin hosting** (`host` module) for MKAP (native), VST3, and AUv2 (macOS) - load and run third-party plugins through one `HostedPlugin` trait
 - **MKAP plugin system** for building your own modular processing chains
 - **Real-time streaming** via an RTAudio-style API (optional `realtime` feature) with real hardware-clocked backends: CoreAudio (macOS), WASAPI (Windows), ALSA (Linux)
-- **Zero-copy design** with boxed slices for minimal allocation overhead
 
 ## Installation
 
@@ -36,11 +36,19 @@ For real-time audio streaming (real CoreAudio/WASAPI/ALSA backends), enable the 
 mkaudiolibrary = { version = "2.0.0", features = ["realtime"] }
 ```
 
-For SIMD-accelerated DSP hot paths:
+For SIMD-accelerated DSP/TF hot paths:
 
 ```toml
 [dependencies]
 mkaudiolibrary = { version = "2.0.0", features = ["simd"] }
+```
+
+For physically-modeled analog circuit simulation (tubes, diodes, transistors, WDF networks):
+
+```toml
+[dependencies]
+mkaudiolibrary = { version = "2.0.0", features = ["sim"] }
+# or with SIMD backends for sim's internal math: "sim-avx2" / "sim-avx512" / "sim-neon"
 ```
 
 For hosting third-party VST3 plugins:
@@ -64,7 +72,7 @@ For MIDI support with mkmidilibrary integration:
 mkaudiolibrary = { version = "2.0.0", features = ["midi"] }
 ```
 
-For GUI support with mkgraphic integration:
+For plugin GUI support with [mkapk](https://github.com/mkaudio-company/mkapk) integration (`mkapk-core` + `mkapk-host`):
 
 ```toml
 [dependencies]
@@ -88,18 +96,18 @@ println!("Loaded: {} channels, {} samples, {}Hz",
     audio.sample_rate()
 );
 
-// Convert to thread-safe buffers for processing
-let buffers = audio.to_buffers();
+// Convert to buffers for processing
+let mut buffers = audio.to_buffers();
 
 // Apply compression to each channel
-let mut comp = Compression::new(audio.sample_rate() as f64);
+let mut comp = Compression::new(audio.sample_rate());
 comp.threshold = -12.0;
 comp.ratio = 4.0;
 
-for buffer in &buffers {
-    let output = Buffer::new(buffer.len());
-    comp.run(buffer, &output);
-    // ... copy processed output back
+for buffer in &mut buffers {
+    let mut output = Buffer::new(buffer.len());
+    comp.run(buffer, &mut output);
+    // ... use processed output
 }
 
 // Save result
@@ -110,41 +118,29 @@ audio.save("output.wav", FileFormat::Wav);
 
 ### buffer
 
-Thread-safe audio buffers designed for concurrent multi-threaded access:
+Plain (unlocked) audio sample containers, single-owner - use `&mut` per audio-processing thread rather than sharing one instance across threads:
 
 | Type | Description | Use Case |
 |------|-------------|----------|
-| `Buffer<T>` | General-purpose buffer with read/write locking | Sample storage, inter-thread communication |
+| `Buffer<T>` | Resizable, owned block of samples (`Box<[T]>` wrapper) | Owning your own sample storage (`AudioIO`/`MidiIO` themselves just borrow `&[T]`/`&mut [T]`, not `Buffer`) |
 | `PushBuffer<T>` | FIFO buffer that shifts samples on push | FIR filters, convolution |
 | `CircularBuffer<T>` | Ring buffer with power-of-2 sizing | Delay lines, lookahead buffers |
 
-All buffers use `Arc<RwLock<...>>` internally, allowing multiple concurrent readers or exclusive write access.
+All three implement `Deref`/`DerefMut<Target = [T]>`, so they can be indexed or passed anywhere a slice is expected.
 
 ```rust
 use mkaudiolibrary::buffer::Buffer;
-use std::thread;
 
-let buffer = Buffer::<f64>::new(1024);
-let buffer_clone = buffer.clone();  // Shares underlying data
-
-// Writer thread
-let writer = thread::spawn(move || {
-    let mut guard = buffer_clone.write();
-    for i in 0..1024 {
-        guard[i] = (i as f64 / 1024.0).sin();
-    }
-});
-
-writer.join().unwrap();
-
-// Reader thread
-let guard = buffer.read();
-println!("First sample: {}", guard[0]);
+let mut buffer = Buffer::<f32>::new(1024);
+for i in 0..1024 {
+    buffer[i] = (i as f32 / 1024.0).sin();
+}
+println!("First sample: {}", buffer[0]);
 ```
 
 ### dsp
 
-Audio processing components organized by category:
+Audio processing components organized by category. `run()` methods take `&[f32]` input and `&mut [f32]` output directly.
 
 #### Utility Functions
 
@@ -180,8 +176,19 @@ let output = sat.process(0.8);
 
 // Process buffer
 let input = Buffer::from_slice(&[0.0, 0.5, 1.0, -0.5, -1.0]);
-let output = Buffer::new(5);
-sat.run(&input, &output);
+let mut output = Buffer::new(5);
+sat.run(&input, &mut output);
+```
+
+For a physically-modeled alternative driven by an actual vacuum tube circuit (requires the `sim` feature):
+
+```rust
+#[cfg(feature = "sim")]
+{
+    use mkaudiolibrary::dsp::TubeSaturation;
+    let mut tube = TubeSaturation::new(44100.0);
+    let wet = tube.process(0.5);
+}
 ```
 
 #### Circuit Simulation (Modified Nodal Analysis)
@@ -194,7 +201,7 @@ Sample-by-sample circuit analysis for real-time filtering:
 - **Per-sample updates** for reactive element state
 
 ```rust
-use mkaudiolibrary::dsp::{Circuit, Resistor, Capacitor, Inductor};
+use mkaudiolibrary::dsp::{Circuit, Resistor, Capacitor};
 
 // Create an RC lowpass filter: fc = 1/(2πRC) ≈ 159Hz
 let mut circuit = Circuit::new(44100.0, 2);
@@ -205,15 +212,34 @@ circuit.add_component(Box::new(Capacitor::new(2, 0, 1e-6)));    // 1µF
 circuit.preprocess(10.0);
 
 // Process samples
-for input_sample in audio_input {
-    let output = circuit.process(input_sample, 2);  // Input voltage, probe node 2
-}
+let output = circuit.process(1.0, 2);  // Input voltage, probe node 2
+```
+
+#### IIR/FIR Filtering
+
+RBJ biquad sections (with Butterworth cascade helper) and windowed-sinc FIR design:
+
+```rust
+use mkaudiolibrary::dsp::iir::{Biquad, BiquadType, IirFilter};
+use mkaudiolibrary::dsp::fir::FirFilter;
+
+// Single biquad section
+let mut lowpass = Biquad::new(BiquadType::LowPass, 44100.0, 1000.0, 0.707, 0.0);
+let y = lowpass.process(0.5);
+
+// 4th-order Butterworth lowpass (two cascaded biquads)
+let mut butterworth = IirFilter::butterworth(BiquadType::LowPass, 4, 44100.0, 1000.0);
+let y2 = butterworth.process(0.5);
+
+// Windowed-sinc FIR lowpass, 101 taps
+let mut fir_lp = FirFilter::lowpass(101, 44100.0, 1000.0);
+let y3 = fir_lp.process(0.5);
 ```
 
 #### Dynamics Processing
 
 ```rust
-use mkaudiolibrary::dsp::{Compression, Limit};
+use mkaudiolibrary::dsp::{Compression, Limit, Gate};
 use mkaudiolibrary::buffer::Buffer;
 
 // Compressor with soft knee
@@ -231,10 +257,31 @@ limiter.gain = 0.0;            // dB input gain
 limiter.ceiling = -0.1;        // dB output ceiling
 limiter.release = 100.0;       // ms
 
+// Downward-expanding noise gate with hold time
+let mut gate = Gate::new(44100.0);
+gate.threshold = -40.0;        // dB
+gate.hold = 50.0;              // ms
+gate.range = -60.0;            // dB attenuation when fully closed
+
 // Process buffers
 let input = Buffer::new(1024);
-let output = Buffer::new(1024);
-compressor.run(&input, &output);
+let mut output = Buffer::new(1024);
+compressor.run(&input, &mut output);
+```
+
+#### Sample-Rate Conversion
+
+```rust
+use mkaudiolibrary::dsp::{Oversampler, Saturation, resample};
+
+// Integer oversampling around a nonlinear stage (reduces aliasing)
+let mut os = Oversampler::new(4, 44100.0);
+let sat = Saturation::new(10.0, 10.0, 1.0, 1.0, 0.0, false);
+let wet = os.process(1.0, |x| sat.process(x));
+
+// Whole-buffer FFT-based resampling (offline/analysis use)
+let input = vec![0.0f32; 1000];
+let output = resample(&input, 44100.0, 48000.0);
 ```
 
 #### Time-Based Effects
@@ -245,11 +292,11 @@ use mkaudiolibrary::buffer::Buffer;
 
 // Convolution with impulse response
 let impulse_response = vec![1.0, 0.5, 0.25, 0.125];
-let conv = Convolution::new(&impulse_response).unwrap();
+let mut conv = Convolution::new(&impulse_response);
 
 let input = Buffer::new(1024);
-let output = Buffer::new(1024);
-conv.run(&input, &output);
+let mut output = Buffer::new(1024);
+conv.run(&input, &mut output);
 
 // Feedback delay
 let mut delay = Delay::new(250.0, 44100.0);  // 250ms delay
@@ -278,7 +325,7 @@ println!("Duration: {:.2} seconds", audio.length());
 
 // Direct channel access
 if let Some(left) = audio.channel(0) {
-    let peak = left.iter().fold(0.0_f64, |max, &s| max.max(s.abs()));
+    let peak = left.iter().fold(0.0_f32, |max, &s| max.max(s.abs()));
     println!("Peak level: {:.4}", peak);
 }
 
@@ -296,20 +343,16 @@ audio.save("output.aiff", FileFormat::Aiff);
 
 #### Buffer Integration
 
-Seamlessly integrate with thread-safe buffers for DSP processing:
-
 ```rust
 use mkaudiolibrary::audiofile::AudioFile;
-use mkaudiolibrary::buffer::Buffer;
 
 let mut audio = AudioFile::default();
 audio.load("input.wav");
 
-// Convert to thread-safe buffers
+// Convert to buffers for processing
 let buffers = audio.to_buffers();
 
-// Process each channel in parallel (example)
-// ... parallel processing ...
+// ... process each channel ...
 
 // Copy results back
 audio.from_buffers(&buffers);
@@ -359,7 +402,13 @@ audio.save_bwf("output_bwf.wav");
 
 ### processor
 
-MKAU plugin format for modular audio processing chains with thread-safe Buffer-based I/O:
+MKAU plugin format for modular audio processing chains. `AudioIO` is a
+thin, non-owning view: it borrows per-channel slices from storage the
+*caller* owns for the life of the stream, rather than allocating its own
+(matching how VST3/CoreAudio hand a plugin pointers into host-owned
+memory). `input`/`sidechain_in`/`sidechain_out` are `Option` since a
+generator plugin may have no input and sidechain busses are often absent;
+`output` is always present.
 
 ```rust
 use mkaudiolibrary::processor::{Processor, AudioIO, load};
@@ -371,8 +420,14 @@ println!("Loaded: {}", plugin.name());
 // Prepare for playback
 plugin.prepare_to_play(512, 44100);
 
-// Create audio I/O buffers
-let mut audio = AudioIO::stereo(512);
+// Own the actual sample storage for the stream's lifetime...
+let input_storage = vec![vec![0.0f32; 512]; 2];
+let mut output_storage = vec![vec![0.0f32; 512]; 2];
+
+// ...and borrow an AudioIO view into it for each block.
+let input: Vec<&[f32]> = input_storage.iter().map(Vec::as_slice).collect();
+let mut output: Vec<&mut [f32]> = output_storage.iter_mut().map(Vec::as_mut_slice).collect();
+let mut audio = AudioIO::new(Some(&input), &mut output, None, None);
 
 // Process audio
 plugin.run(&mut audio);
@@ -382,30 +437,27 @@ plugin.run(&mut audio);
 
 ```rust
 use mkaudiolibrary::processor::{Processor, AudioIO};
-use mkaudiolibrary::buffer::Buffer;
 
 struct GainPlugin {
-    gain: f64,
+    gain: f32,
 }
 
 impl Processor for GainPlugin {
     fn init(&mut self) {}
     fn name(&self) -> String { String::from("Gain") }
-    fn get_parameter(&self, _index: usize) -> f64 { self.gain }
-    fn set_parameter(&mut self, _index: usize, value: f64) { self.gain = value; }
+    fn get_parameter(&self, _index: usize) -> f32 { self.gain }
+    fn set_parameter(&mut self, _index: usize, value: f32) { self.gain = value; }
     fn get_parameter_name(&self, _index: usize) -> String { String::from("Gain") }
     fn prepare_to_play(&mut self, _buffer_size: usize, _sample_rate: usize) {}
 
-    #[cfg(feature = "gui")]
-    fn get_view(&self) -> Option<&View> { None }
-    #[cfg(feature = "gui")]
-    fn get_view_mut(&mut self) -> Option<&mut View> { None }
+    // `editor()` defaults to `None` (no GUI) - only override it for a plugin
+    // with a `PluginEditor` (see the GUI example above).
 
     fn run(&self, audio: &mut AudioIO) {
-        for ch in 0..audio.input.len().min(audio.output.len()) {
-            let input = audio.input[ch].read();
-            let mut output = audio.output[ch].write();
-            for i in 0..input.len() {
+        let Some(input) = audio.input else { return };
+        for ch in 0..input.len().min(audio.output.len()) {
+            let (input, output) = (input[ch], &mut audio.output[ch]);
+            for i in 0..input.len().min(output.len()) {
                 output[i] = input[i] * self.gain;
             }
         }
@@ -423,23 +475,36 @@ mkaudiolibrary::declare_plugin!(GainPlugin, GainPlugin::new);
 
 #### MIDI Processing (requires `midi` feature)
 
+`MidiIO` follows the same non-owning pattern: `input` is always present,
+`output` is `Option` (a plugin that only consumes MIDI has nowhere to write
+outgoing messages).
+
 ```rust
 #[cfg(feature = "midi")]
 use mkaudiolibrary::processor::{Processor, AudioIO, MidiIO, MidiMessage};
 
 // Process with MIDI
-let mut audio = AudioIO::stereo(512);
-let mut midi = MidiIO::new(512);
+#[cfg(feature = "midi")]
+let mut midi_input = vec![None; 512];
+#[cfg(feature = "midi")]
+let mut midi_output = vec![None; 512];
+#[cfg(feature = "midi")]
+let mut midi = MidiIO::new(&mut midi_input, Some(&mut midi_output));
 
 // Add MIDI input messages
-midi.input[0] = Some(MidiMessage::note_on(0, 60, 100));
+#[cfg(feature = "midi")]
+{ midi.input[0] = Some(MidiMessage::note_on(0, 60, 100)); }
 
 // Run processor with MIDI
+#[cfg(feature = "midi")]
 plugin.run_with_midi(&mut audio, &mut midi);
 
 // Check MIDI output
-for msg in midi.output.iter().flatten() {
-    println!("MIDI out: {:?}", msg);
+#[cfg(feature = "midi")]
+if let Some(output) = midi.output.as_deref() {
+    for msg in output.iter().flatten() {
+        println!("MIDI out: {:?}", msg);
+    }
 }
 ```
 
@@ -468,11 +533,36 @@ for i in 0..plugin.num_parameters() {
     println!("  [{}] {} = {:.3}", i, plugin.parameter_name(i), plugin.get_parameter(i));
 }
 
-let mut audio = AudioIO::new(plugin.num_inputs(), plugin.num_outputs(), 0, 0, 512);
+let input_storage = vec![vec![0.0f32; 512]; plugin.num_inputs()];
+let mut output_storage = vec![vec![0.0f32; 512]; plugin.num_outputs()];
+let input: Vec<&[f32]> = input_storage.iter().map(Vec::as_slice).collect();
+let mut output: Vec<&mut [f32]> = output_storage.iter_mut().map(Vec::as_mut_slice).collect();
+let mut audio = AudioIO::new(Some(&input), &mut output, None, None);
 plugin.process(&mut audio);
 ```
 
-The VST3 backend talks directly to a plugin's `IComponent`/`IAudioProcessor`/`IEditController` COM-style interfaces using hand-written vtables matching Steinberg's public ABI - no vendored SDK or C++ toolchain required. The AUv2 backend uses the system's AudioComponent registry via CoreAudio/AudioToolbox, negotiating 64-bit float with a 32-bit float fallback for plugins that don't support 64-bit processing.
+The VST3 backend talks directly to a plugin's `IComponent`/`IAudioProcessor`/`IEditController` COM-style interfaces using hand-written vtables matching Steinberg's public ABI - no vendored SDK or C++ toolchain required. Both the VST3 and AUv2 backends negotiate 32-bit float first (this library's own native sample format, and what every VST3 plugin and most third-party AUs support), falling back to 64-bit float with a per-block conversion scratch buffer only for the plugins that require it.
+
+### sim (Analog Circuit Simulation, optional feature)
+
+Physically-modeled vacuum tubes, diodes, transistors, op-amps, potentiometers, switches, and passive/RLC filters, merged in from [libmksim](https://github.com/mkaudio-company/libmksim). Linear passive networks use Wave Digital Filters (series/parallel adaptor trees); nonlinear devices use local Newton-Raphson solvers over the Koren/Shockley/Ebers-Moll/square-law equations. Enable with the `sim` feature; `sim-avx2`/`sim-avx512`/`sim-neon` additionally enable SIMD backends for its internal fast-math.
+
+```rust
+#[cfg(feature = "sim")]
+{
+    use mkaudiolibrary::sim::components::tubes::{TriodeStage, PARAMS_12AX7};
+    use mkaudiolibrary::sim::components::CircuitComponent;
+
+    let mut triode = TriodeStage::new(PARAMS_12AX7.clone());
+    triode.prepare(44100.0);
+
+    let input = [0.5f32; 64];
+    let mut output = [0.0f32; 64];
+    triode.process_block(&input, &mut output);
+}
+```
+
+[`dsp::TubeSaturation`](#saturation-analog-modeling) builds on this module to provide a physically-modeled alternative to `dsp::Saturation`.
 
 ### tf (Time-Frequency Analysis)
 
@@ -599,14 +689,14 @@ let comp_clone = compressor.clone();
 
 let callback: AudioCallback = Box::new(move |output, input, frames, _, _| {
     // Deinterleave to separate channel buffers
-    let input_buffers = deinterleave(input, 2, frames);
+    let mut input_buffers = deinterleave(input, 2, frames);
 
     // Process each channel
     let mut comp = comp_clone.lock().unwrap();
-    let output_buffers: Vec<Buffer<f64>> = input_buffers.iter()
+    let output_buffers: Vec<Buffer<f32>> = input_buffers.iter_mut()
         .map(|buf| {
-            let out = Buffer::new(frames);
-            comp.run(buf, &out);
+            let mut out = Buffer::new(frames);
+            comp.run(buf, &mut out);
             out
         })
         .collect();
@@ -616,18 +706,6 @@ let callback: AudioCallback = Box::new(move |output, input, frames, _, _| {
     0
 });
 ```
-
-## Thread Safety
-
-All buffer types implement `Send + Sync` and use interior mutability with `RwLock`:
-
-| Operation | Behavior |
-|-----------|----------|
-| `buffer.read()` | Returns `BufferReadGuard`, multiple allowed |
-| `buffer.write()` | Returns `BufferWriteGuard`, exclusive access |
-| `buffer.clone()` | Creates new handle to same data (like `Arc`) |
-
-Guards automatically release locks when dropped (RAII pattern).
 
 ## Supported Audio Formats
 
@@ -640,6 +718,17 @@ Guards automatically release locks when dropped (RAII pattern).
 Supported bit depths: 8, 16, 24, 32-bit
 
 ## Changelog
+
+### 2.1.0
+- **`f32` throughout**: `dsp`, `processor::AudioIO`, `audiofile`, `buffer`, and the plugin hosting backends now operate on `f32` (previously `f64`), matching VST3/AU/MKAP's native sample format and `sim`'s own circuit models - removes a redundant conversion at every plugin-hosting and `sim` boundary
+- **Unlocked buffers**: `Buffer`/`PushBuffer`/`CircularBuffer` dropped their internal `Arc<RwLock<...>>` - they're plain owned containers now (`Deref`/`DerefMut<Target = [T]>`, no `.read()`/`.write()` guards), since nothing in this crate's own processing graph shared them across threads without its own synchronization
+- **`dsp` API**: `run()` methods now take `&[f32]`/`&mut [f32]` directly instead of `&Buffer<f64>`
+- **New analog circuit simulation**: `sim` module (feature-gated) merged in from [libmksim](https://github.com/mkaudio-company/libmksim) - vacuum tubes, diodes, transistors, op-amps, potentiometers, switches, and passive/RLC filters via Wave Digital Filters and Newton-Raphson solvers; `dsp::TubeSaturation` builds on it for a physically-modeled saturation alternative
+- **Expanded `dsp`**: new `dsp::iir` (RBJ biquad + Butterworth cascades), `dsp::fir` (windowed-sinc design), `dsp::Gate` (noise gate), `dsp::Oversampler` (integer oversampling), and `dsp::resampling` (FFT-based whole-buffer resampling)
+- **SIMD independence**: `crate::simd` split into per-backend files (`scalar`/`x86_64`/`aarch64`), with `dot`/`mul_elementwise`/`mix_scalar` as the single canonical `f32` primitives shared by `dsp` and `tf` (previously duplicated under `_f32`-suffixed names during the `f64` -> `f32` transition); `sim`'s own `f32`-lane trait-based SIMD abstraction now lives at `crate::simd::generic`, independent of the `simd` feature
+- VST3/AUv2 hosting now prefers 32-bit float negotiation (matching this library's native format) with a 64-bit float fallback, inverted from the previous `f64`-native preference
+- **`gui` feature**: now backed by [mkapk](https://github.com/mkaudio-company/mkapk)'s `mkapk-core`/`mkapk-host` (a plugin-editor GUI framework: widget tree, geometry, paint commands, and `PluginEditor`/`EditorHost` parent-window-embedding traits) instead of `mkgraphic` - a better fit for hosted plugin editors than a general-purpose windowing crate, and pure Rust with no platform-specific dependencies, so it's now verified on Windows/Linux too, not just macOS. `Processor::get_view()`/`get_view_mut()`/`get_preferred_size()` were replaced by a single `editor() -> Option<&mut dyn PluginEditor>` (default `None`)
+- **`AudioIO`/`MidiIO` are non-owning views now**: both gained a lifetime parameter and their fields became borrowed slices (`&[&[f32]]`/`&mut [&mut [f32]]`, `&mut [Option<MidiMessage>]`) instead of owned `Vec<Buffer<f32>>`/`Box<[Option<MidiMessage>]>` - the caller owns the actual sample/message storage for the stream's lifetime and borrows a view into it per block, avoiding the allocate-and-copy `AudioIO::new(channel_count, buffer_size)` used to do. `AudioIO::input`/`sidechain_in`/`sidechain_out` and `MidiIO::output` are `Option` (generator plugins have no input, sidechain busses are often absent, and not every plugin produces MIDI output); `AudioIO::output` and `MidiIO::input` are always present. `AudioIO::set_channel`/`resize` and `MidiIO::resize` were removed along with the owned storage they resized
 
 ### 2.0.0
 - **Real realtime backends**: `realtime` module restructured into per-platform backends (mirroring `mkmidilibrary`'s design) - CoreAudio (AUHAL), WASAPI (event-driven `IAudioClient`), and ALSA (blocking `snd_pcm`) now drive real, hardware-clocked audio I/O instead of a simulated dummy stream
@@ -656,10 +745,10 @@ Supported bit depths: 8, 16, 24, 32-bit
 - Re-exports `View`, `Window`, `WindowBuilder`, `Extent`, `Point` from mkgraphic
 
 ### 1.3.0
-- **Buffer-based Processor I/O**: Changed `Processor::run()` to use `AudioIO` struct with thread-safe `Buffer<f64>` types
+- **Buffer-based Processor I/O**: Changed `Processor::run()` to use `AudioIO` struct with `Buffer` types
 - **MIDI support**: New `midi` feature with `MidiIO` struct and `run_with_midi()` method
 - **mkmidilibrary integration**: Re-exports `MidiMessage` from mkmidilibrary for MIDI event handling
-- `AudioIO` provides `stereo()`, `mono()`, and `new()` constructors for flexible channel configurations
+- `AudioIO` provides `new()` and `set_channel()` constructors for flexible channel configurations
 
 ### 1.2.0
 - BWF (Broadcast Wave Format) support with `bext` chunk for broadcast metadata
@@ -672,7 +761,6 @@ Supported bit depths: 8, 16, 24, 32-bit
 - Platform backends: CoreAudio (macOS), WASAPI (Windows), ALSA (Linux)
 - Helper functions for buffer interleaving/deinterleaving
 - `stereo_callback` wrapper for simplified stereo processing
-- Seamless integration with thread-safe `Buffer` types
 
 ### 1.0.0
 - Major update with thread-safe buffers using `RwLock`

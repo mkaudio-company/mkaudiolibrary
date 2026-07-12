@@ -11,8 +11,8 @@
 //!
 //! struct GainPlugin
 //! {
-//!     parameters : [(String, f64); 1],
-//!     internal_buffer : Buffer<f64>
+//!     parameters : [(String, f32); 1],
+//!     internal_buffer : Buffer<f32>
 //! }
 //!
 //! impl GainPlugin
@@ -31,14 +31,12 @@
 //! {
 //!     fn init(&mut self) {}
 //!     fn name(&self) -> String { String::from("Gain") }
-//!     fn get_parameter(&self, index : usize) -> f64 { self.parameters[index].1 }
-//!     fn set_parameter(&mut self, index : usize, value : f64) { self.parameters[index].1 = value; }
+//!     fn get_parameter(&self, index : usize) -> f32 { self.parameters[index].1 }
+//!     fn set_parameter(&mut self, index : usize, value : f32) { self.parameters[index].1 = value; }
 //!     fn get_parameter_name(&self, index : usize) -> String { self.parameters[index].0.clone() }
 //!
 //!     #[cfg(feature = "gui")]
-//!     fn get_view(&self) -> Option<&View> { None }
-//!     #[cfg(feature = "gui")]
-//!     fn get_view_mut(&mut self) -> Option<&mut View> { None }
+//!     fn editor(&mut self) -> Option<&mut dyn PluginEditor> { None }
 //!
 //!     fn prepare_to_play(&mut self, buffer_size : usize, _sample_rate : usize)
 //!     {
@@ -48,14 +46,15 @@
 //!     fn run(&self, audio : &mut AudioIO)
 //!     {
 //!         let gain = self.parameters[0].1;
-//!         let num_channels = audio.input.len().min(audio.output.len());
+//!         let Some(input) = audio.input else { return };
+//!         let num_channels = input.len().min(audio.output.len());
 //!         for channel in 0..num_channels
 //!         {
-//!             let input_guard = audio.input[channel].read();
-//!             let mut output_guard = audio.output[channel].write();
-//!             for sample in 0..input_guard.len().min(output_guard.len())
+//!             let input = input[channel];
+//!             let output = &mut audio.output[channel];
+//!             for sample in 0..input.len().min(output.len())
 //!             {
-//!                 output_guard[sample] = input_guard[sample] * gain;
+//!                 output[sample] = input[sample] * gain;
 //!             }
 //!         }
 //!     }
@@ -80,7 +79,7 @@
 //! fn process_with_midi(processor: &dyn Processor, audio: &mut AudioIO, midi: &mut MidiIO)
 //! {
 //!     // Process incoming MIDI messages
-//!     for msg in &midi.input
+//!     for msg in midi.input.iter().flatten()
 //!     {
 //!         // Handle MIDI messages (note on/off, CC, etc.)
 //!     }
@@ -88,25 +87,52 @@
 //!     // Run audio processing
 //!     processor.run(audio);
 //!
-//!     // Optionally generate MIDI output
-//!     // midi.output.push(MidiMessage::NoteOn { channel: 0, key: 60, velocity: 100 });
+//!     // Optionally generate MIDI output, if this plugin has any
+//!     // if let Some(output) = midi.output.as_deref_mut() {
+//!     //     output[0] = Some(MidiMessage::NoteOn { channel: 0, key: 60, velocity: 100 });
+//!     // }
+//! }
+//! ```
+//!
+//! ## Instrument Plugins
+//!
+//! A synth/generator has no audio input - only MIDI in and audio out.
+//! Override `num_inputs` to declare that, so hosts (VST3/AU/MKAP alike)
+//! don't connect an input bus that will never be read; `audio.input` will
+//! then be `None` in `run`/`run_with_midi`:
+//!
+//! ```ignore
+//! impl Processor for MySynth
+//! {
+//!     fn num_inputs(&self) -> usize { 0 }
+//!     fn num_outputs(&self) -> usize { 2 }
+//!
+//!     fn run(&self, audio : &mut AudioIO)
+//!     {
+//!         debug_assert!(audio.input.is_none());
+//!         // ...generate audio into audio.output...
+//!     }
 //! }
 //! ```
 //!
 //! ## GUI Example (requires `gui` feature)
 //!
+//! `Processor::editor()` returns a [`PluginEditor`] - a plugin-embedding
+//! editor (widget tree, geometry, and parent-window-handle lifecycle from
+//! [mkapk](https://github.com/mkaudio-company/mkapk)), not a standalone
+//! application window. The host embeds it into its own parent window:
+//!
 //! ```ignore
 //! #[cfg(feature = "gui")]
-//! use mkaudiolibrary::processor::{Processor, AudioIO, View, Window, WindowBuilder, Extent};
+//! use mkaudiolibrary::processor::{Processor, AudioIO, ParentWindowHandle};
 //!
 //! #[cfg(feature = "gui")]
-//! fn open_plugin_window(processor: &dyn Processor)
+//! fn open_plugin_editor(processor: &mut dyn Processor, parent: ParentWindowHandle, host: &dyn mkaudiolibrary::processor::EditorHost)
 //! {
-//!     if let Some(view) = processor.get_view()
+//!     if let Some(editor) = processor.editor()
 //!     {
-//!         let size = processor.get_preferred_size();
-//!         let window = WindowBuilder::new(processor.name().as_str(), size).build();
-//!         window.show();
+//!         let constraints = editor.size_constraints();
+//!         editor.open(parent, host);
 //!     }
 //! }
 //! ```
@@ -124,27 +150,43 @@
 extern crate libloading;
 use libloading::{Library, Symbol};
 
-use crate::buffer::Buffer;
-
 #[cfg(feature = "midi")]
 pub use mkmidilibrary::midi::MidiMessage;
 
 #[cfg(feature = "gui")]
-pub use mkgraphic::host::WindowBuilder;
+pub use mkapk_core::{Point, Pointf, Size, Sizef};
 #[cfg(feature = "gui")]
-pub use mkgraphic::prelude::{Extent, Point, View, Window};
+pub use mkapk_host::editor::{EditorHost, ParentWindowHandle, PluginEditor, SizeConstraints};
 
+/// Standard speaker channel layouts - a convenient way to size the sample
+/// storage a caller allocates before borrowing an [`AudioIO`] view into it,
+/// without spelling out a raw channel count.
+///
+/// # Example
+/// ```ignore
+/// let channels = ChannelLayout::Stereo.num_channels();
+/// let storage = vec![vec![0.0f32; 512]; channels];
+/// ```
 pub enum ChannelLayout {
+    /// 1 channel.
     Mono,
+    /// 2 channels: left, right.
     Stereo,
+    /// 3 channels: left, center, right.
     LCR,
+    /// 4 channels: front left, front right, rear left, rear right.
     Quad,
+    /// 6 channels: 5.1 surround (L, R, C, LFE, rear L, rear R).
     Surround5p1,
+    /// 8 channels: 7.1 surround (5.1 plus side L/R).
     Surround7p1,
+    /// 10 channels: 7.1.2 surround (7.1 plus two height channels).
     Surround7p1p2,
+    /// 12 channels: 7.1.4 surround (7.1 plus four height channels).
     Surround7p1p4,
 }
 impl ChannelLayout {
+    /// Number of discrete audio channels in this layout.
     pub fn num_channels(&self) -> usize {
         match self {
             ChannelLayout::Mono => 1,
@@ -159,100 +201,86 @@ impl ChannelLayout {
     }
 }
 
-/// Audio I/O container for buffer-based processing.
+/// Audio I/O view for buffer-based processing.
 ///
-/// Provides access to audio input/output buffers and optional sidechain buffers.
-/// Each buffer is a `Buffer<f64>` that can be safely shared across threads.
+/// A thin, non-owning wrapper over per-channel sample slices - input and
+/// sidechain-input channels are borrowed immutably, output and
+/// sidechain-output channels mutably. `AudioIO` doesn't allocate or own any
+/// sample storage itself: the caller (typically a host driving
+/// [`Processor::run`] once per audio callback) owns the actual buffers for
+/// the life of the stream and constructs a new `AudioIO` borrowing into
+/// them for each block, matching how real audio APIs (VST3's
+/// `AudioBusBuffers`, CoreAudio's `AudioBufferList`) hand a plugin raw
+/// pointers into host-owned memory rather than copying into a buffer the
+/// plugin owns.
+///
+/// `input`, `sidechain_in`, and `sidechain_out` are `Option`: a generator
+/// plugin (synth, noise source, ...) may have no audio input at all, and
+/// sidechain busses are commonly absent. `output` is always present -
+/// every processor produces *some* output, even if it's silence.
 ///
 /// # Example
 /// ```ignore
 /// fn process(audio: &mut AudioIO)
 /// {
-///     for ch in 0..audio.input.len().min(audio.output.len())
+///     let Some(input) = audio.input else { return };
+///     for ch in 0..input.len().min(audio.output.len())
 ///     {
-///         let input = audio.input[ch].read();
-///         let mut output = audio.output[ch].write();
-///         for i in 0..input.len()
+///         let (input, output) = (input[ch], &mut audio.output[ch]);
+///         for i in 0..input.len().min(output.len())
 ///         {
 ///             output[i] = input[i];
 ///         }
 ///     }
 /// }
+///
+/// // Building one for a call, from caller-owned storage:
+/// let input_storage = vec![vec![0.0f32; 512]; 2];
+/// let mut output_storage = vec![vec![0.0f32; 512]; 2];
+/// let input: Vec<&[f32]> = input_storage.iter().map(Vec::as_slice).collect();
+/// let mut output: Vec<&mut [f32]> = output_storage.iter_mut().map(Vec::as_mut_slice).collect();
+/// let mut audio = AudioIO::new(Some(&input), &mut output, None, None);
+/// process(&mut audio);
 /// ```
-pub struct AudioIO {
-    /// Input audio buffers (one per channel).
-    pub input: Vec<Buffer<f64>>,
-    /// Output audio buffers (one per channel).
-    pub output: Vec<Buffer<f64>>,
-    /// Sidechain input buffers (optional, one per channel).
-    pub sidechain_in: Vec<Buffer<f64>>,
-    /// Sidechain output buffers (optional, one per channel).
-    pub sidechain_out: Vec<Buffer<f64>>,
+pub struct AudioIO<'a> {
+    /// Input audio channels, borrowed from caller-owned storage. `None` for
+    /// a plugin with no audio input (e.g. an instrument/generator).
+    pub input: Option<&'a [&'a [f32]]>,
+    /// Output audio channels, borrowed mutably from caller-owned storage.
+    pub output: &'a mut [&'a mut [f32]],
+    /// Sidechain input channels. `None` when no sidechain bus is connected.
+    pub sidechain_in: Option<&'a [&'a [f32]]>,
+    /// Sidechain output channels. `None` when no sidechain bus is connected.
+    pub sidechain_out: Option<&'a mut [&'a mut [f32]]>,
 }
 
-impl AudioIO {
-    /// Create a new AudioIO with the specified channel counts and buffer size.
-    ///
-    /// # Arguments
-    /// * `input_channels` - Number of input channels
-    /// * `output_channels` - Number of output channels
-    /// * `sidechain_in_channels` - Number of sidechain input channels
-    /// * `sidechain_out_channels` - Number of sidechain output channels
-    /// * `buffer_size` - Size of each buffer in samples
+impl<'a> AudioIO<'a> {
+    /// Wrap existing per-channel sample slices - no allocation.
     pub fn new(
-        input_channels: usize,
-        output_channels: usize,
-        sidechain_in_channels: usize,
-        sidechain_out_channels: usize,
-        buffer_size: usize,
+        input: Option<&'a [&'a [f32]]>,
+        output: &'a mut [&'a mut [f32]],
+        sidechain_in: Option<&'a [&'a [f32]]>,
+        sidechain_out: Option<&'a mut [&'a mut [f32]]>,
     ) -> Self {
         Self {
-            input: (0..input_channels)
-                .map(|_| Buffer::new(buffer_size))
-                .collect(),
-            output: (0..output_channels)
-                .map(|_| Buffer::new(buffer_size))
-                .collect(),
-            sidechain_in: (0..sidechain_in_channels)
-                .map(|_| Buffer::new(buffer_size))
-                .collect(),
-            sidechain_out: (0..sidechain_out_channels)
-                .map(|_| Buffer::new(buffer_size))
-                .collect(),
-        }
-    }
-
-    /// Create an AudioIO with layout.
-    pub fn set_channel(layout: ChannelLayout, buffer_size: usize) -> Self {
-        Self::new(
-            layout.num_channels(),
-            layout.num_channels(),
-            0,
-            0,
-            buffer_size,
-        )
-    }
-
-    /// Resize all buffers to a new size.
-    pub fn resize(&mut self, buffer_size: usize) {
-        for buf in &self.input {
-            buf.resize(buffer_size);
-        }
-        for buf in &self.output {
-            buf.resize(buffer_size);
-        }
-        for buf in &self.sidechain_in {
-            buf.resize(buffer_size);
-        }
-        for buf in &self.sidechain_out {
-            buf.resize(buffer_size);
+            input,
+            output,
+            sidechain_in,
+            sidechain_out,
         }
     }
 }
 
-impl Default for AudioIO {
+impl Default for AudioIO<'_> {
+    /// An empty view (no channels). Mainly useful as a placeholder before
+    /// the first real block is available.
     fn default() -> Self {
-        Self::set_channel(ChannelLayout::Stereo, 1024)
+        Self {
+            input: None,
+            output: &mut [],
+            sidechain_in: None,
+            sidechain_out: None,
+        }
     }
 }
 
@@ -264,12 +292,18 @@ impl Default for AudioIO {
 ///
 /// Only available with the `midi` feature enabled.
 ///
+/// A thin, non-owning wrapper, the same way as [`AudioIO`]: the caller owns
+/// the message slots for the stream's lifetime and borrows a `MidiIO` into
+/// them for each block. `output` is `Option`: a plugin that only consumes
+/// MIDI (e.g. a MIDI-controlled effect with no MIDI generation/thru of its
+/// own) has nowhere to write outgoing messages.
+///
 /// # Example
 /// ```ignore
 /// #[cfg(feature = "midi")]
 /// fn process_midi(midi: &mut MidiIO)
 /// {
-///     for msg in &midi.input
+///     for msg in midi.input.iter().flatten()
 ///     {
 ///         match msg
 ///         {
@@ -285,36 +319,45 @@ impl Default for AudioIO {
 ///         }
 ///     }
 ///     // Clear input after processing
-///     midi.input.clear();
+///     midi.input.fill(None);
 /// }
+///
+/// // Building one for a call, from caller-owned storage:
+/// #[cfg(feature = "midi")]
+/// let mut input_storage = vec![None; 512];
+/// #[cfg(feature = "midi")]
+/// let mut output_storage = vec![None; 512];
+/// #[cfg(feature = "midi")]
+/// let mut midi = MidiIO::new(&mut input_storage, Some(&mut output_storage));
 /// ```
 #[cfg(feature = "midi")]
-pub struct MidiIO {
+pub struct MidiIO<'a> {
     /// Incoming MIDI messages for the current processing block.
-    pub input: Box<[Option<MidiMessage>]>,
-    /// Outgoing MIDI messages to be sent after processing.
-    pub output: Box<[Option<MidiMessage>]>,
+    pub input: &'a mut [Option<MidiMessage>],
+    /// Outgoing MIDI messages to be sent after processing. `None` for a
+    /// plugin with no MIDI output.
+    pub output: Option<&'a mut [Option<MidiMessage>]>,
 }
 
 #[cfg(feature = "midi")]
-impl MidiIO {
-    /// Create a new empty MidiIO.
-    pub fn new(buffer_size: usize) -> Self {
-        Self {
-            input: vec![None; buffer_size].into_boxed_slice(),
-            output: vec![None; buffer_size].into_boxed_slice(),
-        }
-    }
-    pub fn resize(&mut self, buffer_size: usize) {
-        self.input = vec![None; buffer_size].into_boxed_slice();
-        self.output = vec![None; buffer_size].into_boxed_slice();
+impl<'a> MidiIO<'a> {
+    /// Wrap existing input/output message slots - no allocation.
+    pub fn new(
+        input: &'a mut [Option<MidiMessage>],
+        output: Option<&'a mut [Option<MidiMessage>]>,
+    ) -> Self {
+        Self { input, output }
     }
 }
 
 #[cfg(feature = "midi")]
-impl Default for MidiIO {
+impl Default for MidiIO<'_> {
+    /// An empty view (no message slots).
     fn default() -> Self {
-        Self::new(1024)
+        Self {
+            input: &mut [],
+            output: None,
+        }
     }
 }
 
@@ -345,9 +388,10 @@ macro_rules! declare_plugin {
 /// dynamically or used directly in a processing chain.
 ///
 /// ## Audio I/O
-/// The `run` method uses `AudioIO` which contains thread-safe `Buffer<f64>` types
-/// for input, output, and sidechain channels. Access buffer data using `.read()`
-/// for inputs and `.write()` for outputs.
+/// The `run` method uses `AudioIO`, a thin non-owning view whose
+/// input/output/sidechain channels are plain `&[f32]`/`&mut [f32]` slices
+/// borrowed from caller-owned storage -- index into them directly
+/// (`audio.input[ch]`/`audio.output[ch]`).
 ///
 /// ## MIDI Support
 /// When the `midi` feature is enabled, use `run_with_midi` for processors that
@@ -369,45 +413,55 @@ pub trait Processor {
         0
     }
 
+    /// Get the number of audio input channels this processor expects.
+    ///
+    /// Defaults to 2 (stereo). Override to declare a different count -
+    /// instrument/generator plugins that take no audio input (only MIDI
+    /// in, audio out) should return 0 so hosts (including
+    /// [`crate::host`]'s unified plugin hosting) know not to allocate or
+    /// connect an input bus that will never be read.
+    fn num_inputs(&self) -> usize {
+        2
+    }
+
+    /// Get the number of audio output channels this processor produces.
+    ///
+    /// Defaults to 2 (stereo). Override to declare a different count.
+    fn num_outputs(&self) -> usize {
+        2
+    }
+
     /// Get the value of a parameter by index.
     /// Returns a value typically in the range 0.0 to 1.0.
-    fn get_parameter(&self, index: usize) -> f64;
+    fn get_parameter(&self, index: usize) -> f32;
 
     /// Set the value of a parameter by index.
-    fn set_parameter(&mut self, index: usize, value: f64);
+    fn set_parameter(&mut self, index: usize, value: f32);
 
     /// Get the display name of a parameter by index.
     fn get_parameter_name(&self, index: usize) -> String;
 
-    /// Get the plugin's UI view.
+    /// Get the plugin's editor (GUI), if it has one.
     ///
-    /// Only available with the `gui` feature enabled.
-    /// Returns the View containing the plugin's UI elements.
+    /// Only available with the `gui` feature enabled. Unlike a standalone
+    /// application window, a [`PluginEditor`] is embedded into a host-owned
+    /// parent window: the host calls `open(parent, host)` to embed it,
+    /// `resize()`/`idle()` during its lifetime, and `close()` to tear it
+    /// down (see [`PluginEditor`] and [`EditorHost`]). Its preferred size
+    /// comes from `PluginEditor::size_constraints()`, not a separate method
+    /// on `Processor`. Returns `None` for plugins with no GUI.
     ///
     /// # Example
     /// ```ignore
     /// #[cfg(feature = "gui")]
-    /// fn get_view(&self) -> Option<&View>
+    /// fn editor(&mut self) -> Option<&mut dyn PluginEditor>
     /// {
-    ///     self.view.as_ref()
+    ///     self.editor.as_deref_mut()
     /// }
     /// ```
     #[cfg(feature = "gui")]
-    fn get_view(&self) -> Option<&View>;
-
-    /// Get a mutable reference to the plugin's UI view.
-    ///
-    /// Only available with the `gui` feature enabled.
-    #[cfg(feature = "gui")]
-    fn get_view_mut(&mut self) -> Option<&mut View>;
-
-    /// Get the preferred window size for the plugin UI.
-    ///
-    /// Only available with the `gui` feature enabled.
-    /// Returns the preferred width and height as an Extent.
-    #[cfg(feature = "gui")]
-    fn get_preferred_size(&self) -> Extent {
-        Extent::new(400.0, 300.0)
+    fn editor(&mut self) -> Option<&mut dyn PluginEditor> {
+        None
     }
 
     /// Prepare the processor for playback.
@@ -427,18 +481,19 @@ pub trait Processor {
     /// ```ignore
     /// fn run(&self, audio : &mut AudioIO)
     /// {
-    ///     for ch in 0..audio.input.len().min(audio.output.len())
+    ///     let Some(input) = audio.input else { return };
+    ///     for ch in 0..input.len().min(audio.output.len())
     ///     {
-    ///         let input = audio.input[ch].read();
-    ///         let mut output = audio.output[ch].write();
-    ///         for i in 0..input.len()
+    ///         let input = input[ch];
+    ///         let output = &mut audio.output[ch];
+    ///         for i in 0..input.len().min(output.len())
     ///         {
     ///             output[i] = input[i] * self.gain;
     ///         }
     ///     }
     /// }
     /// ```
-    fn run(&self, audio: &mut AudioIO);
+    fn run(&self, audio: &mut AudioIO<'_>);
 
     /// Process audio with MIDI input/output.
     ///
@@ -449,7 +504,7 @@ pub trait Processor {
     /// * `audio` - Audio I/O container with input/output/sidechain buffers
     /// * `midi` - MIDI I/O container with input/output message vectors
     #[cfg(feature = "midi")]
-    fn run_with_midi(&self, audio: &mut AudioIO, midi: &mut MidiIO);
+    fn run_with_midi(&self, audio: &mut AudioIO<'_>, midi: &mut MidiIO<'_>);
 }
 
 /// Load a plugin from a `.mkap` dynamic library file.

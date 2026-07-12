@@ -177,7 +177,7 @@ struct ProcessSetup {
     process_mode: i32,
     symbolic_sample_size: i32,
     max_samples_per_block: i32,
-    sample_rate: f64,
+    sample_rate: f32,
 }
 
 #[repr(C)]
@@ -227,7 +227,7 @@ struct ParameterInfo {
     short_title: [u16; 128],
     units: [u16; 128],
     step_count: i32,
-    default_normalized_value: f64,
+    default_normalized_value: f32,
     unit_id: i32,
     flags: i32,
 }
@@ -246,13 +246,13 @@ struct IEditControllerVtbl {
     get_parameter_count: unsafe extern "system" fn(*mut c_void) -> i32,
     get_parameter_info: unsafe extern "system" fn(*mut c_void, i32, *mut ParameterInfo) -> TResult,
     get_param_string_by_value:
-        unsafe extern "system" fn(*mut c_void, u32, f64, *mut u16) -> TResult,
+        unsafe extern "system" fn(*mut c_void, u32, f32, *mut u16) -> TResult,
     get_param_value_by_string:
-        unsafe extern "system" fn(*mut c_void, u32, *mut u16, *mut f64) -> TResult,
-    normalized_param_to_plain: unsafe extern "system" fn(*mut c_void, u32, f64) -> f64,
-    plain_param_to_normalized: unsafe extern "system" fn(*mut c_void, u32, f64) -> f64,
-    get_param_normalized: unsafe extern "system" fn(*mut c_void, u32) -> f64,
-    set_param_normalized: unsafe extern "system" fn(*mut c_void, u32, f64) -> TResult,
+        unsafe extern "system" fn(*mut c_void, u32, *mut u16, *mut f32) -> TResult,
+    normalized_param_to_plain: unsafe extern "system" fn(*mut c_void, u32, f32) -> f32,
+    plain_param_to_normalized: unsafe extern "system" fn(*mut c_void, u32, f32) -> f32,
+    get_param_normalized: unsafe extern "system" fn(*mut c_void, u32) -> f32,
+    set_param_normalized: unsafe extern "system" fn(*mut c_void, u32, f32) -> TResult,
     set_component_handler: unsafe extern "system" fn(*mut c_void, *mut c_void) -> TResult,
     create_view: unsafe extern "system" fn(*mut c_void, *const i8) -> *mut c_void,
 }
@@ -669,8 +669,11 @@ pub(super) struct Vst3Hosted {
     active: bool,
     initialized_processing: bool,
     parameter_ids: Vec<u32>,
-    input_scratch_f32: Vec<Vec<f32>>,
-    output_scratch_f32: Vec<Vec<f32>>,
+    // Only populated (and used) when `sample_size == K_SAMPLE_64`: per-channel
+    // f32->f64 conversion scratch (this library's own buffers are f32; only
+    // a plugin that rejects 32-bit float needs this).
+    input_scratch_f64: Vec<Vec<f64>>,
+    output_scratch_f64: Vec<Vec<f64>>,
 }
 
 // Every COM interaction happens through whichever thread owns this value;
@@ -822,13 +825,13 @@ pub(super) fn load(descriptor: &PluginDescriptor) -> HostResult<Box<dyn HostedPl
         vendor,
         num_inputs,
         num_outputs,
-        sample_size: K_SAMPLE_64,
+        sample_size: K_SAMPLE_32,
         block_size: 512,
         active: false,
         initialized_processing: false,
         parameter_ids: Vec::new(),
-        input_scratch_f32: Vec::new(),
-        output_scratch_f32: Vec::new(),
+        input_scratch_f64: Vec::new(),
+        output_scratch_f64: Vec::new(),
     }))
 }
 
@@ -868,7 +871,7 @@ impl HostedPlugin for Vst3Hosted {
         }
     }
 
-    fn get_parameter(&self, index: usize) -> f64 {
+    fn get_parameter(&self, index: usize) -> f32 {
         let (Some(controller), Some(&id)) = (&self.controller, self.parameter_ids.get(index))
         else {
             return 0.0;
@@ -879,7 +882,7 @@ impl HostedPlugin for Vst3Hosted {
         }
     }
 
-    fn set_parameter(&mut self, index: usize, value: f64) {
+    fn set_parameter(&mut self, index: usize, value: f32) {
         let (Some(controller), Some(&id)) = (&self.controller, self.parameter_ids.get(index))
         else {
             return;
@@ -898,12 +901,15 @@ impl HostedPlugin for Vst3Hosted {
             }
         }
 
+        // Prefer 32-bit float (matches this library's native sample type
+        // with no conversion, and every VST3 plugin is required to support
+        // it per the spec); fall back to 64-bit float.
         let sample_size = unsafe {
             let vt = *(self.processor.0 as *const *const IAudioProcessorVtbl);
-            if ((*vt).can_process_sample_size)(self.processor.0, K_SAMPLE_64) == K_RESULT_OK {
-                K_SAMPLE_64
-            } else {
+            if ((*vt).can_process_sample_size)(self.processor.0, K_SAMPLE_32) == K_RESULT_OK {
                 K_SAMPLE_32
+            } else {
+                K_SAMPLE_64
             }
         };
 
@@ -911,7 +917,7 @@ impl HostedPlugin for Vst3Hosted {
             process_mode: 0,
             symbolic_sample_size: sample_size,
             max_samples_per_block: block_size as i32,
-            sample_rate: sample_rate as f64,
+            sample_rate: sample_rate as f32,
         };
         let status = unsafe {
             let vt = *(self.processor.0 as *const *const IAudioProcessorVtbl);
@@ -944,16 +950,16 @@ impl HostedPlugin for Vst3Hosted {
         self.parameter_ids = parameter_ids;
         self.initialized_processing = true;
 
-        if sample_size == K_SAMPLE_32 {
-            self.input_scratch_f32 = (0..self.num_inputs)
-                .map(|_| vec![0.0f32; block_size])
+        if sample_size == K_SAMPLE_64 {
+            self.input_scratch_f64 = (0..self.num_inputs)
+                .map(|_| vec![0.0f64; block_size])
                 .collect();
-            self.output_scratch_f32 = (0..self.num_outputs)
-                .map(|_| vec![0.0f32; block_size])
+            self.output_scratch_f64 = (0..self.num_outputs)
+                .map(|_| vec![0.0f64; block_size])
                 .collect();
         } else {
-            self.input_scratch_f32 = Vec::new();
-            self.output_scratch_f32 = Vec::new();
+            self.input_scratch_f64 = Vec::new();
+            self.output_scratch_f64 = Vec::new();
         }
 
         Ok(())
@@ -985,7 +991,7 @@ impl HostedPlugin for Vst3Hosted {
         Ok(())
     }
 
-    fn process(&mut self, audio: &mut AudioIO) {
+    fn process(&mut self, audio: &mut AudioIO<'_>) {
         if !self.active {
             return;
         }
@@ -1000,44 +1006,36 @@ impl HostedPlugin for Vst3Hosted {
             return;
         }
 
-        let input_guards: Vec<_> = audio
-            .input
-            .iter()
-            .take(self.num_inputs)
-            .map(|b| b.read())
-            .collect();
-        let mut output_guards: Vec<_> = audio
-            .output
-            .iter()
-            .take(self.num_outputs)
-            .map(|b| b.write())
-            .collect();
+        let input_channels = audio.input.unwrap_or(&[]);
 
         let mut input_ptrs: Vec<*mut c_void>;
         let mut output_ptrs: Vec<*mut c_void>;
 
-        if self.sample_size == K_SAMPLE_64 {
-            input_ptrs = input_guards
+        if self.sample_size == K_SAMPLE_32 {
+            input_ptrs = input_channels
                 .iter()
-                .map(|g| g.as_ptr() as *mut c_void)
+                .take(self.num_inputs)
+                .map(|b| b.as_ptr() as *mut c_void)
                 .collect();
-            output_ptrs = output_guards
+            output_ptrs = audio
+                .output
                 .iter_mut()
-                .map(|g| g.as_mut_ptr() as *mut c_void)
+                .take(self.num_outputs)
+                .map(|b| b.as_mut_ptr() as *mut c_void)
                 .collect();
         } else {
-            for (ch, guard) in input_guards.iter().enumerate() {
+            for (ch, buf) in input_channels.iter().take(self.num_inputs).enumerate() {
                 for i in 0..frames {
-                    self.input_scratch_f32[ch][i] = guard[i] as f32;
+                    self.input_scratch_f64[ch][i] = buf[i] as f64;
                 }
             }
             input_ptrs = self
-                .input_scratch_f32
+                .input_scratch_f64
                 .iter_mut()
                 .map(|v| v.as_mut_ptr() as *mut c_void)
                 .collect();
             output_ptrs = self
-                .output_scratch_f32
+                .output_scratch_f64
                 .iter_mut()
                 .map(|v| v.as_mut_ptr() as *mut c_void)
                 .collect();
@@ -1082,10 +1080,10 @@ impl HostedPlugin for Vst3Hosted {
             ((*vt).process)(self.processor.0, &mut data);
         }
 
-        if self.sample_size == K_SAMPLE_32 {
-            for (ch, guard) in output_guards.iter_mut().enumerate() {
+        if self.sample_size == K_SAMPLE_64 {
+            for (ch, buf) in audio.output.iter_mut().take(self.num_outputs).enumerate() {
                 for i in 0..frames {
-                    guard[i] = self.output_scratch_f32[ch][i] as f64;
+                    buf[i] = self.output_scratch_f64[ch][i] as f32;
                 }
             }
         }

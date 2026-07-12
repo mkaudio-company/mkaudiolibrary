@@ -2,7 +2,7 @@
 name = "mkaudiolibrary"
 description = "Modular audio processing library including MKAU plugin format based on Rust."
 license = "MIT"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 documentation = "https://docs.rs/mkaudiolibrary"
 readme = "README.md"
@@ -18,15 +18,26 @@ default = []
 realtime = ["dep:coreaudio-sys", "dep:windows", "dep:alsa"]
 simd = []
 midi = ["mkmidilibrary"]
-gui = ["mkgraphic"]
+gui = ["dep:mkapk-core", "dep:mkapk-host"]
 vst3 = ["dep:coreaudio-sys"]
 au = ["dep:coreaudio-sys"]
+# Analog circuit simulation (tubes, diodes, transistors, WDF networks),
+sim = []
+# f32 SIMD backends for `sim`'s internal math (independent of the `simd` feature above).
+sim-avx2 = ["sim"]
+sim-avx512 = ["sim"]
+sim-neon = ["sim"]
 
 [dependencies]
 libloading = "0.9"
 no_denormals = "0.3"
 mkmidilibrary = { version = "0.2", optional = true }
-mkgraphic = { version = "0.4", optional = true }
+# Plugin-GUI framework (widget tree, geometry, paint commands, and the
+# PluginEditor/EditorHost parent-window-embedding traits) - a better fit
+# than a general-purpose windowing crate since it's built for hosted
+# plugin editors (VST3/AU/MKAP), not standalone application windows.
+mkapk-core = { version = "0.1", optional = true }
+mkapk-host = { version = "0.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-sys = { version = "0.2.18", optional = true }

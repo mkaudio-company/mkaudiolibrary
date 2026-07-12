@@ -9,13 +9,13 @@
 //! - [`rfft`]/[`irfft`] - real-input/real-output specializations that skip
 //!   computing the conjugate-symmetric half of the spectrum.
 
-use std::f64::consts::PI;
+use std::f32::consts::PI;
 
 use super::complex::Complex64;
 
 /// Naive `O(n^2)` DFT. Correct for any length; prefer [`fft`] for anything
 /// beyond a few hundred samples.
-pub fn dft(input: &[f64]) -> Vec<Complex64> {
+pub fn dft(input: &[f32]) -> Vec<Complex64> {
     let n = input.len();
     let mut output = Vec::with_capacity(n);
     let mut cos_table = vec![0.0; n];
@@ -23,7 +23,7 @@ pub fn dft(input: &[f64]) -> Vec<Complex64> {
 
     for k in 0..n {
         for t in 0..n {
-            let angle = -2.0 * PI * ((k * t) % n) as f64 / n as f64;
+            let angle = -2.0 * PI * ((k * t) % n) as f32 / n as f32;
             cos_table[t] = angle.cos();
             sin_table[t] = angle.sin();
         }
@@ -63,7 +63,7 @@ fn fft_radix2(input: &[Complex64]) -> Vec<Complex64> {
 
     let mut len = 2;
     while len <= n {
-        let angle_step = -2.0 * PI / len as f64;
+        let angle_step = -2.0 * PI / len as f32;
         let w_len = Complex64::from_polar(1.0, angle_step);
         let mut i = 0;
         while i < n {
@@ -95,7 +95,7 @@ fn bluestein_fft(input: &[Complex64]) -> Vec<Complex64> {
     let mut chirp = vec![Complex64::new(0.0, 0.0); n];
     for (k, c) in chirp.iter_mut().enumerate() {
         let kk = (k as u128 * k as u128) % (2 * n as u128);
-        let angle = -PI * kk as f64 / n as f64;
+        let angle = -PI * kk as f32 / n as f32;
         *c = Complex64::from_polar(1.0, angle);
     }
 
@@ -140,7 +140,7 @@ pub fn ifft(input: &[Complex64]) -> Vec<Complex64> {
     }
 
     let conjugated: Vec<Complex64> = input.iter().map(|c| c.conj()).collect();
-    let scale = 1.0 / n as f64;
+    let scale = 1.0 / n as f32;
     fft(&conjugated)
         .iter()
         .map(|c| c.conj().scale(scale))
@@ -149,7 +149,7 @@ pub fn ifft(input: &[Complex64]) -> Vec<Complex64> {
 
 /// Real-input FFT: returns only the first `n/2 + 1` bins (the rest are the
 /// conjugate mirror of these, per the symmetry of a real-valued signal's spectrum).
-pub fn rfft(input: &[f64]) -> Vec<Complex64> {
+pub fn rfft(input: &[f32]) -> Vec<Complex64> {
     let complex_input: Vec<Complex64> = input.iter().map(|&x| Complex64::new(x, 0.0)).collect();
     let full = fft(&complex_input);
     let half = input.len() / 2 + 1;
@@ -159,7 +159,7 @@ pub fn rfft(input: &[f64]) -> Vec<Complex64> {
 /// Inverse of [`rfft`]: reconstructs the full conjugate-symmetric spectrum
 /// from its first `output_len/2 + 1` bins, then takes the real part of the
 /// inverse FFT.
-pub fn irfft(spectrum: &[Complex64], output_len: usize) -> Vec<f64> {
+pub fn irfft(spectrum: &[Complex64], output_len: usize) -> Vec<f32> {
     if output_len == 0 {
         return Vec::new();
     }
@@ -178,7 +178,7 @@ pub fn irfft(spectrum: &[Complex64], output_len: usize) -> Vec<f64> {
 mod tests {
     use super::*;
 
-    fn approx_eq_complex(a: &[Complex64], b: &[Complex64], tol: f64) {
+    fn approx_eq_complex(a: &[Complex64], b: &[Complex64], tol: f32) {
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
             assert!(
@@ -198,39 +198,39 @@ mod tests {
 
     #[test]
     fn fft_matches_dft_power_of_two() {
-        let input: Vec<f64> = (0..16).map(|i| (i as f64 * 0.7).sin()).collect();
+        let input: Vec<f32> = (0..16).map(|i| (i as f32 * 0.7).sin()).collect();
         let expected = dft(&input);
         let complex_input: Vec<Complex64> = input.iter().map(|&x| Complex64::new(x, 0.0)).collect();
         let actual = fft(&complex_input);
-        approx_eq_complex(&expected, &actual, 1e-9);
+        approx_eq_complex(&expected, &actual, 1e-4);
     }
 
     #[test]
     fn fft_matches_dft_arbitrary_length() {
         // 13 is prime, forcing the Bluestein path.
-        let input: Vec<f64> = (0..13).map(|i| (i as f64 * 1.3).cos()).collect();
+        let input: Vec<f32> = (0..13).map(|i| (i as f32 * 1.3).cos()).collect();
         let expected = dft(&input);
         let complex_input: Vec<Complex64> = input.iter().map(|&x| Complex64::new(x, 0.0)).collect();
         let actual = fft(&complex_input);
-        approx_eq_complex(&expected, &actual, 1e-9);
+        approx_eq_complex(&expected, &actual, 1e-4);
     }
 
     #[test]
     fn ifft_of_fft_is_identity() {
         let input: Vec<Complex64> = (0..37)
-            .map(|i| Complex64::new((i as f64).sin(), (i as f64 * 0.5).cos()))
+            .map(|i| Complex64::new((i as f32).sin(), (i as f32 * 0.5).cos()))
             .collect();
         let roundtrip = ifft(&fft(&input));
-        approx_eq_complex(&input, &roundtrip, 1e-9);
+        approx_eq_complex(&input, &roundtrip, 1e-4);
     }
 
     #[test]
     fn irfft_of_rfft_is_identity() {
-        let input: Vec<f64> = (0..64).map(|i| (i as f64 * 0.3).sin() * 0.5).collect();
+        let input: Vec<f32> = (0..64).map(|i| (i as f32 * 0.3).sin() * 0.5).collect();
         let spectrum = rfft(&input);
         let roundtrip = irfft(&spectrum, input.len());
         for (a, b) in input.iter().zip(roundtrip.iter()) {
-            assert!((a - b).abs() < 1e-9);
+            assert!((a - b).abs() < 1e-4);
         }
     }
 }

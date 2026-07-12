@@ -5,26 +5,30 @@ use super::stft::{StftConfig, stft};
 /// Mel filterbank configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct MelConfig {
-    pub sample_rate: f64,
+    /// Sample rate of the input signal in Hz.
+    pub sample_rate: f32,
+    /// Number of mel filterbank bands.
     pub num_mels: usize,
-    pub min_freq: f64,
-    pub max_freq: f64,
+    /// Lowest frequency covered by the filterbank, in Hz.
+    pub min_freq: f32,
+    /// Highest frequency covered by the filterbank, in Hz.
+    pub max_freq: f32,
 }
 
 #[inline]
-fn hz_to_mel(f: f64) -> f64 {
+fn hz_to_mel(f: f32) -> f32 {
     2595.0 * (1.0 + f / 700.0).log10()
 }
 
 #[inline]
-fn mel_to_hz(m: f64) -> f64 {
-    700.0 * (10f64.powf(m / 2595.0) - 1.0)
+fn mel_to_hz(m: f32) -> f32 {
+    700.0 * (10f32.powf(m / 2595.0) - 1.0)
 }
 
 /// Build a triangular mel filterbank: `num_mels` rows, each `fft_size/2 + 1`
 /// bins wide, ready to be applied to a power/magnitude spectrum via a dot
 /// product (see [`mel_spectrogram`]).
-pub fn mel_filterbank(config: &MelConfig, fft_size: usize) -> Vec<Vec<f64>> {
+pub fn mel_filterbank(config: &MelConfig, fft_size: usize) -> Vec<Vec<f32>> {
     let num_bins = fft_size / 2 + 1;
     if config.num_mels == 0 || num_bins == 0 {
         return Vec::new();
@@ -32,12 +36,12 @@ pub fn mel_filterbank(config: &MelConfig, fft_size: usize) -> Vec<Vec<f64>> {
 
     let mel_min = hz_to_mel(config.min_freq);
     let mel_max = hz_to_mel(config.max_freq);
-    let mel_points: Vec<f64> = (0..config.num_mels + 2)
-        .map(|i| mel_min + (mel_max - mel_min) * i as f64 / (config.num_mels + 1) as f64)
+    let mel_points: Vec<f32> = (0..config.num_mels + 2)
+        .map(|i| mel_min + (mel_max - mel_min) * i as f32 / (config.num_mels + 1) as f32)
         .collect();
     let bin_points: Vec<usize> = mel_points
         .iter()
-        .map(|&m| (((fft_size + 1) as f64) * mel_to_hz(m) / config.sample_rate).floor() as usize)
+        .map(|&m| (((fft_size + 1) as f32) * mel_to_hz(m) / config.sample_rate).floor() as usize)
         .collect();
 
     let mut filters = vec![vec![0.0; num_bins]; config.num_mels];
@@ -51,7 +55,7 @@ pub fn mel_filterbank(config: &MelConfig, fft_size: usize) -> Vec<Vec<f64>> {
                 .take(center.min(num_bins))
                 .skip(left)
             {
-                *slot = (bin - left) as f64 / (center - left) as f64;
+                *slot = (bin - left) as f32 / (center - left) as f32;
             }
         }
         if right > center {
@@ -61,7 +65,7 @@ pub fn mel_filterbank(config: &MelConfig, fft_size: usize) -> Vec<Vec<f64>> {
                 .take(right.min(num_bins))
                 .skip(center)
             {
-                *slot = (right - bin) as f64 / (right - center) as f64;
+                *slot = (right - bin) as f32 / (right - center) as f32;
             }
         }
     }
@@ -75,10 +79,10 @@ pub fn mel_filterbank(config: &MelConfig, fft_size: usize) -> Vec<Vec<f64>> {
 /// Callers typically log-compress the result (e.g. `10.0 * v.max(eps).log10()`)
 /// before further use.
 pub fn mel_spectrogram(
-    signal: &[f64],
+    signal: &[f32],
     stft_config: &StftConfig,
     mel_config: &MelConfig,
-) -> Vec<Vec<f64>> {
+) -> Vec<Vec<f32>> {
     let frames = stft(signal, stft_config);
     let filters = mel_filterbank(mel_config, stft_config.fft_size);
     let num_bins = stft_config.fft_size / 2 + 1;
@@ -86,7 +90,7 @@ pub fn mel_spectrogram(
     frames
         .iter()
         .map(|frame| {
-            let power: Vec<f64> = frame.iter().take(num_bins).map(|c| c.norm_sqr()).collect();
+            let power: Vec<f32> = frame.iter().take(num_bins).map(|c| c.norm_sqr()).collect();
             filters
                 .iter()
                 .map(|filter| crate::simd::dot(&power, filter))
@@ -120,7 +124,7 @@ mod tests {
 
     #[test]
     fn mel_spectrogram_has_expected_shape() {
-        let signal: Vec<f64> = (0..8192).map(|i| (i as f64 * 0.05).sin()).collect();
+        let signal: Vec<f32> = (0..8192).map(|i| (i as f32 * 0.05).sin()).collect();
         let stft_config = StftConfig::new(1024, 512, WindowFunction::Hann);
         let mel_config = MelConfig {
             sample_rate: 44100.0,

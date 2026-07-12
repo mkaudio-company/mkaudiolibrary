@@ -9,7 +9,7 @@
 //! without a hardware clock behind it.
 //!
 //! Audio is exchanged in **non-interleaved** 64-bit float form (one
-//! `AudioBuffer` per channel), matching `AudioIO`'s planar `Vec<Buffer<f64>>`
+//! `AudioBuffer` per channel), matching `AudioIO`'s planar `Vec<Buffer<f32>>`
 //! layout directly with no interleave/deinterleave copy.
 
 use std::ffi::c_void;
@@ -149,9 +149,9 @@ fn query_channels(unit: AudioUnit, scope: AudioUnitScope, element: AudioUnitElem
     }
 }
 
-/// Most third-party AUs only implement the "canonical" 32-bit float format;
-/// 64-bit float is tried first (to avoid a conversion copy) and this is the
-/// fallback when a plugin rejects it, which is common in practice.
+/// 32-bit float is tried first (matches this library's native sample type,
+/// avoiding a conversion copy, and is what most third-party AUs actually
+/// implement); 64-bit float is the fallback for the AUs that reject it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SampleWidth {
     F64,
@@ -224,7 +224,7 @@ fn alloc_buffer_list_storage(channels: usize) -> Vec<u64> {
 
 /// Shared with the input render callback via `inRefCon`: updated right
 /// before each `AudioUnitRender` call in `process()` with pointers into
-/// that call's (locked, and possibly f32-converted) input buffers, plus the
+/// that call's (and possibly f64-converted) input buffers, plus the
 /// negotiated sample width so the copy is byte-count-correct either way.
 /// `process()` isn't reentrant, so there's no concurrent access to guard against.
 struct InputContext {
@@ -279,10 +279,12 @@ pub(super) struct AuHosted {
     active: bool,
     prepared: bool,
     width: SampleWidth,
-    // Only populated (and used) when `width == SampleWidth::F32`: per-channel
-    // conversion scratch, sized to `block_size` once `prepare()` runs.
-    input_scratch_f32: Vec<Vec<f32>>,
-    output_scratch_f32: Vec<Vec<f32>>,
+    // Only populated (and used) when `width == SampleWidth::F64`: per-channel
+    // f32->f64 conversion scratch (this library's own buffers are f32; only
+    // an AU that rejects 32-bit float needs this), sized to `block_size`
+    // once `prepare()` runs.
+    input_scratch_f64: Vec<Vec<f64>>,
+    output_scratch_f64: Vec<Vec<f64>>,
     output_storage: Vec<u64>,
 }
 
@@ -349,9 +351,9 @@ pub(super) fn load(descriptor: &PluginDescriptor) -> HostResult<Box<dyn HostedPl
         block_size: 512,
         active: false,
         prepared: false,
-        width: SampleWidth::F64,
-        input_scratch_f32: Vec::new(),
-        output_scratch_f32: Vec::new(),
+        width: SampleWidth::F32,
+        input_scratch_f64: Vec::new(),
+        output_scratch_f64: Vec::new(),
         output_storage: Vec::new(),
     }))
 }
@@ -409,7 +411,7 @@ impl HostedPlugin for AuHosted {
         }
     }
 
-    fn get_parameter(&self, index: usize) -> f64 {
+    fn get_parameter(&self, index: usize) -> f32 {
         let Some(&param_id) = self.parameter_ids.get(index) else {
             return 0.0;
         };
@@ -423,14 +425,14 @@ impl HostedPlugin for AuHosted {
                 &mut value,
             ) == 0
             {
-                value as f64
+                value as f32
             } else {
                 0.0
             }
         }
     }
 
-    fn set_parameter(&mut self, index: usize, value: f64) {
+    fn set_parameter(&mut self, index: usize, value: f32) {
         let Some(&param_id) = self.parameter_ids.get(index) else {
             return;
         };
@@ -454,26 +456,10 @@ impl HostedPlugin for AuHosted {
             self.prepared = false;
         }
 
-        // Try 64-bit float first (matches this library's native sample
-        // type with no conversion); fall back to 32-bit float, which is
-        // what most third-party AUs actually implement.
+        // Try 32-bit float first (matches this library's native sample
+        // type with no conversion, and is what most third-party AUs
+        // actually implement); fall back to 64-bit float.
         let width = if try_set_format(
-            self.unit,
-            kAudioUnitScope_Input as AudioUnitScope,
-            0,
-            sample_rate,
-            self.num_inputs,
-            SampleWidth::F64,
-        ) && try_set_format(
-            self.unit,
-            kAudioUnitScope_Output as AudioUnitScope,
-            0,
-            sample_rate,
-            self.num_outputs,
-            SampleWidth::F64,
-        ) {
-            SampleWidth::F64
-        } else if try_set_format(
             self.unit,
             kAudioUnitScope_Input as AudioUnitScope,
             0,
@@ -489,9 +475,25 @@ impl HostedPlugin for AuHosted {
             SampleWidth::F32,
         ) {
             SampleWidth::F32
+        } else if try_set_format(
+            self.unit,
+            kAudioUnitScope_Input as AudioUnitScope,
+            0,
+            sample_rate,
+            self.num_inputs,
+            SampleWidth::F64,
+        ) && try_set_format(
+            self.unit,
+            kAudioUnitScope_Output as AudioUnitScope,
+            0,
+            sample_rate,
+            self.num_outputs,
+            SampleWidth::F64,
+        ) {
+            SampleWidth::F64
         } else {
             return Err(HostError::InitializationFailed(
-                "plugin accepts neither 64-bit nor 32-bit non-interleaved float".into(),
+                "plugin accepts neither 32-bit nor 64-bit non-interleaved float".into(),
             ));
         };
 
@@ -560,16 +562,16 @@ impl HostedPlugin for AuHosted {
         self.width = width;
         self.block_size = block_size;
         self.output_storage = alloc_buffer_list_storage(self.num_outputs.max(1));
-        if width == SampleWidth::F32 {
-            self.input_scratch_f32 = (0..self.num_inputs)
-                .map(|_| vec![0.0f32; block_size])
+        if width == SampleWidth::F64 {
+            self.input_scratch_f64 = (0..self.num_inputs)
+                .map(|_| vec![0.0f64; block_size])
                 .collect();
-            self.output_scratch_f32 = (0..self.num_outputs)
-                .map(|_| vec![0.0f32; block_size])
+            self.output_scratch_f64 = (0..self.num_outputs)
+                .map(|_| vec![0.0f64; block_size])
                 .collect();
         } else {
-            self.input_scratch_f32 = Vec::new();
-            self.output_scratch_f32 = Vec::new();
+            self.input_scratch_f64 = Vec::new();
+            self.output_scratch_f64 = Vec::new();
         }
         self.prepared = true;
         Ok(())
@@ -593,7 +595,7 @@ impl HostedPlugin for AuHosted {
         Ok(())
     }
 
-    fn process(&mut self, audio: &mut AudioIO) {
+    fn process(&mut self, audio: &mut AudioIO<'_>) {
         if !self.prepared {
             return;
         }
@@ -608,13 +610,8 @@ impl HostedPlugin for AuHosted {
             return;
         }
 
-        let input_guards: Vec<_> = audio
-            .input
-            .iter()
-            .take(self.num_inputs)
-            .map(|b| b.read())
-            .collect();
         let bytes_per_sample = self.width.bytes();
+        let input_channels = audio.input.unwrap_or(&[]);
 
         unsafe {
             let ctx = &mut *self.input_ctx_ptr;
@@ -622,16 +619,16 @@ impl HostedPlugin for AuHosted {
             ctx.bytes_per_sample = bytes_per_sample;
 
             match self.width {
-                SampleWidth::F64 => {
-                    for guard in &input_guards {
-                        ctx.channel_ptrs.push(guard.as_ptr() as *const u8);
+                SampleWidth::F32 => {
+                    for buf in input_channels.iter().take(self.num_inputs) {
+                        ctx.channel_ptrs.push(buf.as_ptr() as *const u8);
                     }
                 }
-                SampleWidth::F32 => {
-                    for (ch, guard) in input_guards.iter().enumerate() {
-                        let scratch = &mut self.input_scratch_f32[ch];
+                SampleWidth::F64 => {
+                    for (ch, buf) in input_channels.iter().take(self.num_inputs).enumerate() {
+                        let scratch = &mut self.input_scratch_f64[ch];
                         for i in 0..frames {
-                            scratch[i] = guard[i] as f32;
+                            scratch[i] = buf[i] as f64;
                         }
                         ctx.channel_ptrs.push(scratch.as_ptr() as *const u8);
                     }
@@ -640,22 +637,16 @@ impl HostedPlugin for AuHosted {
             ctx.frames = frames;
         }
 
-        let mut output_guards: Vec<_> = audio
-            .output
-            .iter()
-            .take(self.num_outputs)
-            .map(|b| b.write())
-            .collect();
-
         unsafe {
             let list_ptr = self.output_storage.as_mut_ptr() as *mut AudioBufferList;
-            (*list_ptr).mNumberBuffers = output_guards.len() as UInt32;
+            let num_outputs = audio.output.iter().take(self.num_outputs).count();
+            (*list_ptr).mNumberBuffers = num_outputs as UInt32;
             let buffers = std::ptr::addr_of_mut!((*list_ptr).mBuffers) as *mut AudioBuffer;
 
-            for (i, guard) in output_guards.iter_mut().enumerate() {
+            for (i, buf) in audio.output.iter_mut().take(self.num_outputs).enumerate() {
                 let data_ptr = match self.width {
-                    SampleWidth::F64 => guard.as_mut_ptr() as *mut c_void,
-                    SampleWidth::F32 => self.output_scratch_f32[i].as_mut_ptr() as *mut c_void,
+                    SampleWidth::F32 => buf.as_mut_ptr() as *mut c_void,
+                    SampleWidth::F64 => self.output_scratch_f64[i].as_mut_ptr() as *mut c_void,
                 };
                 buffers.add(i).write(AudioBuffer {
                     mNumberChannels: 1,
@@ -677,11 +668,11 @@ impl HostedPlugin for AuHosted {
                 list_ptr,
             );
 
-            if self.width == SampleWidth::F32 {
-                for (i, guard) in output_guards.iter_mut().enumerate() {
-                    let scratch = &self.output_scratch_f32[i];
+            if self.width == SampleWidth::F64 {
+                for (i, buf) in audio.output.iter_mut().take(self.num_outputs).enumerate() {
+                    let scratch = &self.output_scratch_f64[i];
                     for f in 0..frames {
-                        guard[f] = scratch[f] as f64;
+                        buf[f] = scratch[f] as f32;
                     }
                 }
             }

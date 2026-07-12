@@ -9,7 +9,7 @@
 //! for large kernel counts but substantially more involved to implement
 //! and verify correct.
 
-use std::f64::consts::PI;
+use std::f32::consts::PI;
 
 use super::complex::Complex64;
 use super::stft::{WindowFunction, window};
@@ -17,16 +17,21 @@ use super::stft::{WindowFunction, window};
 /// Constant-Q transform configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct CqtConfig {
-    pub sample_rate: f64,
-    pub min_freq: f64,
+    /// Sample rate of the input signal in Hz.
+    pub sample_rate: f32,
+    /// Center frequency of bin 0, in Hz.
+    pub min_freq: f32,
+    /// Total number of output frequency bins.
     pub num_bins: usize,
+    /// Bins per octave (sets the constant Q / kernel length per bin).
     pub bins_per_octave: usize,
+    /// Hop size between analysis frames, in samples.
     pub hop_size: usize,
 }
 
 /// Run the CQT, returning one row per output frame (spaced `hop_size`
 /// samples apart), each `num_bins` complex values wide (bin 0 = `min_freq`).
-pub fn cqt(signal: &[f64], config: &CqtConfig) -> Vec<Vec<Complex64>> {
+pub fn cqt(signal: &[f32], config: &CqtConfig) -> Vec<Vec<Complex64>> {
     if config.num_bins == 0
         || config.hop_size == 0
         || config.bins_per_octave == 0
@@ -35,20 +40,20 @@ pub fn cqt(signal: &[f64], config: &CqtConfig) -> Vec<Vec<Complex64>> {
         return Vec::new();
     }
 
-    let q = 1.0 / (2f64.powf(1.0 / config.bins_per_octave as f64) - 1.0);
+    let q = 1.0 / (2f32.powf(1.0 / config.bins_per_octave as f32) - 1.0);
 
-    let kernels: Vec<(Vec<f64>, Vec<f64>)> = (0..config.num_bins)
+    let kernels: Vec<(Vec<f32>, Vec<f32>)> = (0..config.num_bins)
         .map(|bin| {
-            let freq = config.min_freq * 2f64.powf(bin as f64 / config.bins_per_octave as f64);
+            let freq = config.min_freq * 2f32.powf(bin as f32 / config.bins_per_octave as f32);
             let kernel_len =
                 ((q * config.sample_rate / freq).round() as usize).clamp(1, signal.len().max(1));
             let win = window(WindowFunction::Hann, kernel_len);
-            let norm = 1.0 / kernel_len as f64;
+            let norm = 1.0 / kernel_len as f32;
 
             let mut re = Vec::with_capacity(kernel_len);
             let mut im = Vec::with_capacity(kernel_len);
             for (n, &w) in win.iter().enumerate() {
-                let angle = -2.0 * PI * freq * n as f64 / config.sample_rate;
+                let angle = -2.0 * PI * freq * n as f32 / config.sample_rate;
                 re.push(w * angle.cos() * norm);
                 im.push(w * angle.sin() * norm);
             }
@@ -89,7 +94,7 @@ mod tests {
 
     #[test]
     fn cqt_output_shape_matches_config() {
-        let signal: Vec<f64> = (0..8000).map(|i| (i as f64 * 0.1).sin()).collect();
+        let signal: Vec<f32> = (0..8000).map(|i| (i as f32 * 0.1).sin()).collect();
         let config = CqtConfig {
             sample_rate: 8000.0,
             min_freq: 55.0,
@@ -108,8 +113,8 @@ mod tests {
     fn cqt_responds_more_strongly_at_matching_bin() {
         let sample_rate = 8000.0;
         let tone_freq = 220.0; // matches bin index 0 below (min_freq = 220Hz)
-        let signal: Vec<f64> = (0..8000)
-            .map(|i| (2.0 * PI * tone_freq * i as f64 / sample_rate).sin())
+        let signal: Vec<f32> = (0..8000)
+            .map(|i| (2.0 * PI * tone_freq * i as f32 / sample_rate).sin())
             .collect();
 
         let config = CqtConfig {

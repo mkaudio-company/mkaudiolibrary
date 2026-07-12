@@ -45,21 +45,21 @@ fn main() {
     let frame_counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = frame_counter.clone();
 
-    let mut phase = 0.0f64;
+    let mut phase = 0.0f32;
     let freq = 440.0;
     let amplitude = 0.05; // quiet on purpose
 
     let callback = Box::new(
-        move |output: &mut [f64],
-              _input: &[f64],
+        move |output: &mut [f32],
+              _input: &[f32],
               frames: usize,
-              _time: f64,
+              _time: f32,
               _status: StreamStatus|
               -> i32 {
             let channels = output.len() / frames.max(1);
             for frame in 0..frames {
-                let sample = (phase * 2.0 * std::f64::consts::PI).sin() * amplitude;
-                phase += freq / sample_rate as f64;
+                let sample = (phase * 2.0 * std::f32::consts::PI).sin() * amplitude;
+                phase += freq / sample_rate as f32;
                 if phase >= 1.0 {
                     phase -= 1.0;
                 }
@@ -90,7 +90,7 @@ fn main() {
     println!(
         "Rendered {} frames (~{:.3}s of audio)",
         rendered,
-        rendered as f64 / sample_rate as f64
+        rendered as f32 / sample_rate as f32
     );
     assert!(
         rendered > 0,
